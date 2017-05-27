@@ -8,12 +8,12 @@
 
 /* Place your page table functions here */
 
-
 void vm_bootstrap(void)
 {
-        /* Initialise VM sub-system.  You probably want to initialise your 
+        /* Initialise VM sub-system.  You probably want to initialise your
            frame table here as well.
         */
+        init_frame_table();
 }
 
 int

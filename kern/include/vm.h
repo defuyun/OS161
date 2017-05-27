@@ -44,6 +44,19 @@
 #define VM_FAULT_WRITE       1    /* A write was attempted */
 #define VM_FAULT_READONLY    2    /* A write to a readonly page was attempted*/
 
+#define FRAME_UNUSED 0
+#define FRAME_USED 1
+#define FRAME_RESERVED 3
+
+#define NO_NEXT_FRAME -1
+
+struct frame_table_entry {
+    int references;
+    int next;
+    short inuse;
+};
+
+void init_frame_table(void);
 
 /* Initialization function */
 void vm_bootstrap(void);

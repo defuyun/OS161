@@ -47,71 +47,144 @@
  * part of the VM subsystem.
  *
  */
+uint32_t hpt_hash(struct addrspace *as, vaddr_t faultaddr)
+{
+    uint32_t index;
+    index = (((uint32_t )as) ^ (faultaddr >> PAGE_BITS)) % hash_table_size;
+    return index;
+}
+
+bool insert_page_table_entry(struct addrspace * as, uint32_t entry_hi, uint32_t entry_lo) {
+    uint32_t vpn = entry_hi & PAGE_FRAME;
+    uint32_t index = hpt_hash(as, entry_hi);
+
+    spinlock_acquire(&hash_table_lock);
+    uint32_t next = hash_page_table[index].next;
+    uint32_t head = index;
+    int count = 0;
+
+    while(hash_page_table[index].inuse && count < hash_table_size) {
+        ++index;
+        index %= hash_table_size;
+        count++;
+    }
+
+    if(count == hash_table_size) {
+        spinlock_release(&hash_table_lock);
+        return false;
+    }
+
+    if(head != index) {
+        hash_page_table[head].next = index;
+        hash_page_table[index].next = next;
+        hash_page_table[index].prev = head;
+    }
+
+    hash_page_table[index].entry_hi = entry_hi;
+    hash_page_table[index].entry_lo = entry_lo;
+    hash_page_table[index].inuse = true;
+    hash_page_table[index].pid = (uint32_t) as;
+
+    spinlock_release(&hash_table_lock);
+    return true;
+}
+
+void tlb_flush(void) {
+ 	spl = splhigh();
+
+	for (i=0; i<NUM_TLB; i++) {
+		tlb_write(TLBHI_INVALID(i), TLBLO_INVALID(), i);
+	}
+
+	splx(spl);
+ }
 
 struct addrspace *
 as_create(void)
 {
-        struct addrspace *as;
+    struct addrspace *as;
 
-        as = kmalloc(sizeof(struct addrspace));
-        if (as == NULL) {
-                return NULL;
-        }
-
-        /*
-         * Initialize as needed.
-         */
-
-        return as;
+    as = kmalloc(sizeof(struct addrspace));
+    if (as == NULL) {
+        return NULL;
+    }
+    return as;
 }
 
 int
 as_copy(struct addrspace *old, struct addrspace **ret)
 {
-        struct addrspace *newas;
+    struct addrspace *newas;
 
-        newas = as_create();
-        if (newas==NULL) {
-                return ENOMEM;
+    newas = as_create();
+    if (newas==NULL) {
+        return ENOMEM;
+    }
+
+    int pid = (uint32_t) old;
+
+    spinlock_acquire(&hash_page_table_lock);
+    for(int i = 0; i < hash_table_size; i++) {
+        if(hash_page_table[i].pid == pid) {
+            if(!insert_page_table_entry(newas,
+                                        hash_page_table[i].entry_hi,
+                                        hash_page_table[i].entry_lo,
+                                        )) {
+                spinlock_release(&hash_page_table_lock);
+                return EFAULT; // return some fault telling user no more space left in page table
+            }
         }
+    }
+    spinlock_release(&hash_page_table_lock);
 
-        /*
-         * Write this.
-         */
+    (void)old;
 
-        (void)old;
-
-        *ret = newas;
-        return 0;
+    *ret = newas;
+    return 0;
 }
 
 void
 as_destroy(struct addrspace *as)
 {
-        /*
-         * Clean up as needed.
-         */
+    uint32_t pid = (uint32_t) as;
+    spinlock_acquire(&hash_page_table_lock);
+    for(int i = 0; i < hash_table_size; i++) {
+        if(hash_page_table[i].pid == pid) {
+            free_kpages(hash_page_table[i].entry_lo >> FLAG_OFFSET);
 
-        kfree(as);
+            int prev = hash_page_table[i].prev;
+            int next = hash_page_table[i].next;
+
+            if(prev != NO_NEXT_PAGE) {
+                hash_page_table[prev].next = next;
+            }
+
+            if(next != NO_NEXT_PAGE) {
+                hash_page_table[next].prev = prev;
+            }
+
+            hash_page_table[i].inuse = false;
+            hash_page_table[i].next = NO_NEXT_PAGE;
+            hash_page_table[i].prev = NO_NEXT_PAGE;
+        }
+    }
+    spinlock_release(&hash_page_table_lock);
+
+    kfree(as);
 }
 
 void
 as_activate(void)
 {
-        struct addrspace *as;
+	int i, spl;
+	struct addrspace *as;
 
-        as = proc_getas();
-        if (as == NULL) {
-                /*
-                 * Kernel thread without an address space; leave the
-                 * prior address space in place.
-                 */
-                return;
-        }
+	as = proc_getas();
+	if (as == NULL) {
+		return;
+	}
 
-        /*
-         * Write this.
-         */
+	tlb_flush();
 }
 
 void
@@ -122,6 +195,7 @@ as_deactivate(void)
          * anything. See proc.c for an explanation of why it (might)
          * be needed.
          */
+
 }
 
 /*
@@ -177,7 +251,7 @@ int
 as_define_stack(struct addrspace *as, vaddr_t *stackptr)
 {
         /*
-         * Write this.
+         * Write this. wtf is this suppose to be
          */
 
         (void)as;

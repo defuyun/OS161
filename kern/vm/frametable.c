@@ -54,6 +54,8 @@ void init_frame_and_page_table() {
     // initialize the entry of hash_page_table to not used
     for(i = 0; i < hash_table_size; i++) {
         hash_page_table[i].inuse = false;
+        hash_page_table[i].next = NO_NEXT_PAGE;
+        hash_page_table[i].prev = NO_NEXT_PAGE;
     }
 
     // set frame table as reserved
@@ -106,8 +108,9 @@ vaddr_t alloc_kpages(unsigned int npages)
 
         int curr = next_free_frame;
         next_free_frame = frame_table[curr].next;
-        set_frame_table_entry(curr, NO_NEXT_FRAME, frame_table[curr].references + 1, true);
-
+        set_frame_table_entry(curr, NO_NEXT_FRAME, frame_table[curr].references + 1, FRAME_USED);
+        // zero out the page
+        memset(PADDR_TO_KVADDR(curr * PAGE_SIZE),0,PAGE_SIZE);
         addr = curr * PAGE_SIZE;
     }
     spinlock_release(&frame_table_lock);
@@ -120,6 +123,32 @@ vaddr_t alloc_kpages(unsigned int npages)
 
 void free_kpages(vaddr_t addr)
 {
-    (void) addr;
+
+    spinlock_acquire(&frame_table_lock);
+
+    int frame_index = KVADDR_TO_PADDR(addr) / PAGE_SIZE;
+
+    if(frame_table[frame_index].inuse == FRAME_RESERVED || frame_table[frame_index].inuse == FRAME_UNUSED ||
+       addr < MIPS_KSEG0 || addr >= MIPS_KSEG1) {
+        spinlock_release(&frame_table_lock);
+        return;
+    }
+
+
+    frame_table[frame_index].references -= 1;
+    if(frame_table[frame_index].references == 0) {
+        int prev_next_free = next_free_frame;
+        next_free_frame = frame_index;
+        set_frame_table_entry(frame_index, prev_next_free, 0, FRAME_UNUSED);
+    }
+
+    spinlock_release(&frame_table_lock);
+}
+
+void share_address(vaddr_t addr) {
+    spinlock_acquire(&frame_table_lock);
+    int frame_index = KVADDR_TO_PADDR(addr) / PAGE_SIZE;
+    frame_table[frame_index].references += 1;
+    spinlock_release(&frame_table_lock);
 }
 

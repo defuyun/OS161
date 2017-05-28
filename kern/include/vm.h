@@ -49,6 +49,9 @@
 #define FRAME_RESERVED 3
 
 #define NO_NEXT_FRAME -1
+#define NO_NEXT_PAGE -1
+
+#define FLAG_OFFSET 12
 
 struct frame_table_entry {
     int references;
@@ -62,6 +65,7 @@ struct hash_page_entry {
     uint32_t entry_lo;
     bool inuse;
     int next;
+    int prev;
 };
 
 extern struct spinlock hash_page_table_lock;
@@ -69,6 +73,8 @@ extern struct hash_page_entry * hash_page_table;
 extern int hash_table_size;
 
 void init_frame_table(void);
+void share_address(vaddr_t addr);
+bool insert_page_table_entry(uint32_t pid, int entry_hi, int entry_lo)
 
 /* Initialization function */
 void vm_bootstrap(void);
@@ -84,4 +90,5 @@ void free_kpages(vaddr_t addr);
 void vm_tlbshootdown(const struct tlbshootdown *);
 
 
+void tlb_flush(void);
 #endif /* _VM_H_ */

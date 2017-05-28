@@ -89,6 +89,35 @@ bool insert_page_table_entry(struct addrspace * as, uint32_t entry_hi, uint32_t 
     return true;
 }
 
+static int allocate_memory(struct addrspace * as, vaddr_t addr, size_t memsize, int permission, int defined) {
+    uint32_t pid = (uint32_t) as;
+    if(addr + memsize >= MIPS_KSEG0) {
+        return EFAULT;
+    }
+
+    uint32_t top = ((addr + memsize + PAGE_SIZE -1) & PAGE_FRAME) >> FLAG_OFFSET;
+    uint32_t base = addr >> FLAG_OFFSET;
+
+    for(uint32_t start = top; start <= base; start++) {
+        paddr_t paddr = alloc_kpages(1);
+        uint32_t entry_hi = start << FLAG_OFFSET;
+        uint32_t entry_lo = (paddr & PAGE_FRAME) | (1 << HPTABLE_VALID) & (1 << HPTABLE_GLOBAL);
+        if(permission & HPTABLE_WRITE) {
+            entry_lo |= 1 << HPTABLE_DIRTY;
+        } else {
+            entry_lo &= ^(1 << HPTABLE_DIRTY);
+        }
+        entry_lo |= permission;
+        entry_lo |= defined;
+
+        if(!insert_page_table_entry(as, entry_hi, entry_lo)) {
+            return ENOMEM;
+        }
+    }
+
+    return 0;
+}
+
 void tlb_flush(void) {
  	spl = splhigh();
 
@@ -125,19 +154,17 @@ as_copy(struct addrspace *old, struct addrspace **ret)
 
     spinlock_acquire(&hash_page_table_lock);
     for(int i = 0; i < hash_table_size; i++) {
-        if(hash_page_table[i].pid == pid) {
+        if(hash_page_table[i].inuse && hash_page_table[i].pid == pid) {
             if(!insert_page_table_entry(newas,
                                         hash_page_table[i].entry_hi,
                                         hash_page_table[i].entry_lo,
                                         )) {
                 spinlock_release(&hash_page_table_lock);
-                return EFAULT; // return some fault telling user no more space left in page table
+                return ENOMEM; // return some fault telling user no more space left in page table
             }
         }
     }
     spinlock_release(&hash_page_table_lock);
-
-    (void)old;
 
     *ret = newas;
     return 0;
@@ -149,8 +176,8 @@ as_destroy(struct addrspace *as)
     uint32_t pid = (uint32_t) as;
     spinlock_acquire(&hash_page_table_lock);
     for(int i = 0; i < hash_table_size; i++) {
-        if(hash_page_table[i].pid == pid) {
-            free_kpages(hash_page_table[i].entry_lo >> FLAG_OFFSET);
+        if(hash_page_table[i].inuse && hash_page_table[i].pid == pid) {
+            free_kpages(hash_page_table[i].entry_lo);
 
             int prev = hash_page_table[i].prev;
             int next = hash_page_table[i].next;
@@ -212,39 +239,45 @@ int
 as_define_region(struct addrspace *as, vaddr_t vaddr, size_t memsize,
                  int readable, int writeable, int executable)
 {
-        /*
-         * Write this.
-         */
+    int result = allocate_memory(as, vaddr, memsize, (readable|writeable|executable) << 1, HPTABLE_DEFINED);
+    if(result) {
+        return ENOMEM;
+    }
 
-        (void)as;
-        (void)vaddr;
-        (void)memsize;
-        (void)readable;
-        (void)writeable;
-        (void)executable;
-        return ENOSYS; /* Unimplemented */
+    return 0;
 }
 
 int
 as_prepare_load(struct addrspace *as)
 {
-        /*
-         * Write this.
-         */
-
-        (void)as;
-        return 0;
+    uint32_t pid = (uint32_t) as;
+    spinlock_acquire(&hash_page_table_lock);
+    for(int i = 0; i < hash_table_size; i++) {
+        if(hash_page_table[i].inuse &&
+           hash_page_table[i].pid == pid &&
+           hash_page_table[i].entry_lo & HPTABLE_DEFINED) {
+            hash_page_table[i].entry_lo &= ^HPTABLE_DEFINED;
+            hash_page_table[i].entry_lo |= HPTABLE_SWRITE;
+        }
+    }
+    spinlock_release(&hash_page_table_lock);
+    return 0;
 }
 
 int
 as_complete_load(struct addrspace *as)
 {
-        /*
-         * Write this.
-         */
-
-        (void)as;
-        return 0;
+    uint32_t pid = (uint32_t) as;
+    spinlock_acquire(&hash_page_table_lock);
+    for(int i = 0; i < hash_table_size; i++) {
+        if(hash_page_table[i].inuse &&
+           hash_page_table[i].pid == pid &&
+           hash_page_table[i].entry_lo & HPTABLE_SWRITE) {
+            hash_page_table[i].entry_lo &= ^HPTABLE_SWRITE;
+        }
+    }
+    spinlock_release(&hash_page_table_lock);
+    return 0;
 }
 
 int

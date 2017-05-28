@@ -56,6 +56,18 @@ struct frame_table_entry {
     short inuse;
 };
 
+struct hash_page_entry {
+    uint32_t pid;
+    uint32_t entry_hi;
+    uint32_t entry_lo;
+    bool inuse;
+    int next;
+};
+
+extern struct spinlock hash_page_table_lock;
+extern struct hash_page_entry * hash_page_table;
+extern int hash_table_size;
+
 void init_frame_table(void);
 
 /* Initialization function */

@@ -10,7 +10,7 @@
 
 void vm_bootstrap(void)
 {
-        init_frame_table();
+        init_frame_and_page_table();
 }
 
 int

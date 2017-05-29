@@ -38,6 +38,7 @@
 
 
 #include <machine/vm.h>
+#include <spinlock.h>
 
 /* Fault-type arguments to vm_fault() */
 #define VM_FAULT_READ        0    /* A read was attempted */
@@ -52,6 +53,7 @@
 #define NO_NEXT_PAGE -1
 
 #define FLAG_OFFSET 12
+#define PAGE_BITS FLAG_OFFSET
 
 #define HPTABLE_NOTCACHE      11
 #define HPTABLE_DIRTY         10
@@ -86,9 +88,7 @@ extern struct spinlock hash_page_table_lock;
 extern struct hash_page_entry * hash_page_table;
 extern int hash_table_size;
 
-void init_frame_table(void);
-void share_address(vaddr_t addr);
-bool insert_page_table_entry(uint32_t pid, int entry_hi, int entry_lo)
+void init_frame_and_page_table(void);
 
 /* Initialization function */
 void vm_bootstrap(void);

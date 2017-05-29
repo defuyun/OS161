@@ -4,6 +4,7 @@
 #include <thread.h>
 #include <addrspace.h>
 #include <vm.h>
+#include <spinlock.h>
 
 /* Place your frametable data-structures here
  * You probably also want to write a frametable initialisation
@@ -67,7 +68,7 @@ void init_frame_and_page_table() {
     // set hash page table as reserved
     int hash_page_table_entries = total_mem_usage / PAGE_SIZE + i;
     for(; i < hash_page_table_entries; i++) {
-        set_frame_table_entry(frame_table_size-1-i; NO_NEXT_FRAME, 1, FRAME_RESERVED);
+        set_frame_table_entry(frame_table_size-1-i, NO_NEXT_FRAME, 1, FRAME_RESERVED);
     }
 
     // set os161 frame to reserved
@@ -110,7 +111,7 @@ vaddr_t alloc_kpages(unsigned int npages)
         next_free_frame = frame_table[curr].next;
         set_frame_table_entry(curr, NO_NEXT_FRAME, frame_table[curr].references + 1, FRAME_USED);
         // zero out the page
-        memset(PADDR_TO_KVADDR(curr * PAGE_SIZE),0,PAGE_SIZE);
+        memset((void *)PADDR_TO_KVADDR(curr * PAGE_SIZE),0,PAGE_SIZE);
         addr = curr * PAGE_SIZE;
     }
     spinlock_release(&frame_table_lock);

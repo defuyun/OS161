@@ -125,6 +125,10 @@ void free_kpages(vaddr_t addr)
 {
 
     spinlock_acquire(&frame_table_lock);
+    if(frame_table == NULL) {
+        spinlock_release(&frame_table_lock);
+        return;
+    }
 
     int frame_index = KVADDR_TO_PADDR(addr) / PAGE_SIZE;
 

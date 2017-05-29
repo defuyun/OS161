@@ -158,11 +158,13 @@ as_copy(struct addrspace *old, struct addrspace **ret)
     spinlock_acquire(&hash_page_table_lock);
     for(int i = 0; i < hash_table_size; i++) {
         if(hash_page_table[i].inuse && hash_page_table[i].pid == pid) {
-            if(!insert_page_table_entry(newas,
+                share_address(hash_page_table[i].entry_lo & PAGE_FRAME);
+                if(!insert_page_table_entry(newas,
                                         hash_page_table[i].entry_hi,
                                         hash_page_table[i].entry_lo
                                         )) {
                 spinlock_release(&hash_page_table_lock);
+                as_destroy(newas);
                 return ENOMEM; // return some fault telling user no more space left in page table
             }
         }

@@ -92,6 +92,32 @@ static bool insert_page_table_entry(struct addrspace * as, uint32_t entry_hi, ui
     return true;
 }
 
+static int define_memory(struct addrspace * as, vaddr_t addr, size_t memsize, int permission, int defined) {
+    if(addr + memsize >= MIPS_KSEG0) {
+        return EFAULT;
+    }
+
+    uint32_t top = ((addr + memsize + PAGE_SIZE -1) & PAGE_FRAME) >> FLAG_OFFSET;
+    uint32_t base = addr >> FLAG_OFFSET;
+    paddr_t paddr = 0;
+
+    for(uint32_t start = base; start <= top; start++) {
+        uint32_t entry_hi = start << FLAG_OFFSET;
+        uint32_t entry_lo = ((paddr & PAGE_FRAME) | (1 << HPTABLE_VALID)) & (1 << HPTABLE_GLOBAL);
+        if(permission & HPTABLE_WRITE) {
+            entry_lo |= (1 << HPTABLE_DIRTY);
+        } else {
+            entry_lo &= ~(1 << HPTABLE_DIRTY);
+        }
+        entry_lo |= permission;
+        entry_lo |= defined;
+
+        if(!insert_page_table_entry(as, entry_hi, entry_lo)) {
+            return ENOMEM;
+        }
+    }
+}
+
 static int allocate_memory(struct addrspace * as, vaddr_t addr, size_t memsize, int permission, int defined) {
     if(addr + memsize >= MIPS_KSEG0) {
         return EFAULT;
@@ -103,7 +129,7 @@ static int allocate_memory(struct addrspace * as, vaddr_t addr, size_t memsize, 
     for(uint32_t start = base; start <= top; start++) {
         paddr_t paddr = alloc_kpages(1);
         uint32_t entry_hi = start << FLAG_OFFSET;
-        uint32_t entry_lo = ((paddr & PAGE_FRAME) | (1 << HPTABLE_VALID)) & (1 << HPTABLE_GLOBAL);
+        uint32_t entry_lo = ((paddr & PAGE_FRAME) | (1 << HPTABLE_VALID)) | (1 << HPTABLE_GLOBAL);
         if(permission & HPTABLE_WRITE) {
             entry_lo |= (1 << HPTABLE_DIRTY);
         } else {
@@ -208,19 +234,20 @@ as_destroy(struct addrspace *as)
 void
 as_activate(void)
 {
-	struct addrspace *as;
+    struct addrspace *as;
 
-	as = proc_getas();
-	if (as == NULL) {
-		return;
-	}
+    as = proc_getas();
+    if (as == NULL) { 
+        return;
+    }
 
-	tlb_flush();
+    tlb_flush();
 }
 
 void
 as_deactivate(void)
 {
+    tlb_flush();
         /*
          * Write this. For many designs it won't need to actually do
          * anything. See proc.c for an explanation of why it (might)

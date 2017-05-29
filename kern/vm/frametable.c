@@ -92,17 +92,16 @@ void init_frame_and_page_table() {
 
 vaddr_t alloc_kpages(unsigned int npages)
 {
-    if(npages != 1) return 0;
+    paddr_t addr;
 
     spinlock_acquire(&frame_table_lock);
-    paddr_t addr;
 
     if(frame_table == NULL) {
         spinlock_acquire(&stealmem_lock);
         addr = ram_stealmem(npages);
         spinlock_release(&stealmem_lock);
     } else {
-        if(next_free_frame == NO_NEXT_FRAME) {
+        if(npages != 1 || next_free_frame == NO_NEXT_FRAME) {
             spinlock_release(&frame_table_lock);
             return 0;
         }

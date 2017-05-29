@@ -116,6 +116,8 @@ static int define_memory(struct addrspace * as, vaddr_t addr, size_t memsize, in
             return ENOMEM;
         }
     }
+
+    return 0;
 }
 
 int allocate_memory(int hash_page_index) {

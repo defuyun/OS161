@@ -291,15 +291,14 @@ as_complete_load(struct addrspace *as)
 int
 as_define_stack(struct addrspace *as, vaddr_t *stackptr)
 {
-        /*
-         * Write this. wtf is this suppose to be
-         */
-
-        (void)as;
-
         /* Initial user-level stack pointer */
-        *stackptr = USERSTACK;
+    *stackptr = USERSTACK;
+    vaddr_t location = USERSTACK - PAGE_SIZE * STACK_PAGE;
+    int result = allocate_memory(as, location, PAGE_SIZE * STACK_PAGE, 6 << 1, 0);
+    if(result) {
+        return ENOMEM;
+    }
 
-        return 0;
+    return 0;
 }
 

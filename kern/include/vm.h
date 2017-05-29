@@ -55,11 +55,13 @@
 #define FLAG_OFFSET 12
 #define PAGE_BITS FLAG_OFFSET
 
+// these are offset so you use them by shifting
 #define HPTABLE_NOTCACHE      11
 #define HPTABLE_DIRTY         10
 #define HPTABLE_VALID          9
 #define HPTABLE_GLOBAL         8
 
+// these are actual bit you use them by simple & or |
 #define HPTABLE_READ           8
 #define HPTABLE_WRITE          4
 #define HPTABLE_EXECUTE        2
@@ -67,6 +69,7 @@
 #define HPTABLE_DEFINED       16
 
 #define HPTABLE_PERMISSION    15
+#define HPTABLE_STATEBITS     31
 
 
 struct frame_table_entry {

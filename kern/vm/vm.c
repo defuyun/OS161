@@ -70,6 +70,7 @@ vm_fault(int faulttype, vaddr_t faultaddress)
             }
         }
     } else {
+        // not sure what to do when not found in page table, what does it mean to check valid region
         spinlock_release(&hash_page_table_lock);
         return EFAULT;
     }

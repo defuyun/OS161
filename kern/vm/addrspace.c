@@ -281,6 +281,10 @@ as_complete_load(struct addrspace *as)
         }
     }
     spinlock_release(&hash_page_table_lock);
+    // need to flush tlb because during prepare load we set the softwrite which consequently caused
+    // the tlb entry to have dirty bit set, but this soft write is only temporary so by flushing the tlb
+    // the next time there won't be a softwrite and therefore the permission will be set to normal
+    tlb_flush();
     return 0;
 }
 

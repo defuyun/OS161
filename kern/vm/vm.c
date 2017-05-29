@@ -55,9 +55,11 @@ vm_fault(int faulttype, vaddr_t faultaddress)
     }
 
     uint32_t entry_hi = vpn;
-    uint32_t entry_lo = hash_page_table[index].entry_lo;
+    uint32_t entry_lo;
 
     if(found) {
+        entry_lo = hash_page_table[index].entry_lo;
+        
         if((faulttype == VM_FAULT_READ && !(entry_lo & HPTABLE_READ)) ||
            (faulttype == VM_FAULT_WRITE && !(entry_lo & (HPTABLE_WRITE | HPTABLE_SWRITE)))) {
             spinlock_release(&hash_page_table_lock);

@@ -58,14 +58,14 @@ vm_fault(int faulttype, vaddr_t faultaddress)
     uint32_t entry_lo = hash_page_table[index].entry_lo;
 
     if(found) {
-        if(faulttype == VM_FAULT_READ && !(entry_lo & HPTABLE_READ) ||
-           faulttype == VM_FAULT_WRITE &&
-           !(entry_lo & (HPTABLE_WRITE | HPTABLE_SWRITE))) {
+        if((faulttype == VM_FAULT_READ && !(entry_lo & HPTABLE_READ)) ||
+           (faulttype == VM_FAULT_WRITE && !(entry_lo & (HPTABLE_WRITE | HPTABLE_SWRITE)))) {
             spinlock_release(&hash_page_table_lock);
             return EFAULT;
         } else {
             entry_lo &= ~HPTABLE_STATEBITS;
             if(faulttype == VM_FAULT_WRITE) {
+                // we need to reset dirty bit because it might be a have soft write set
                 entry_lo |= (1 << HPTABLE_DIRTY);
             }
         }

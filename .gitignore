@@ -1,3 +1,4 @@
+kern/compile/*
 *.o
 *.swp
 *.swo

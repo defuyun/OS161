@@ -56,11 +56,11 @@ static uint32_t hpt_hash(struct addrspace *as, vaddr_t faultaddr)
 
 static bool insert_page_table_entry(struct addrspace * as, uint32_t entry_hi, uint32_t entry_lo) {
     uint32_t vpn = entry_hi & PAGE_FRAME;
-    uint32_t index = hpt_hash(as, entry_hi);
+    int index = hpt_hash(as, entry_hi);
 
     spinlock_acquire(&hash_page_table_lock);
-    uint32_t next = hash_page_table[index].next;
-    uint32_t head = index;
+    int next = hash_page_table[index].next;
+    int head = index;
     int count = 0;
 
     while(hash_page_table[index].inuse && count < hash_table_size) {
@@ -78,6 +78,9 @@ static bool insert_page_table_entry(struct addrspace * as, uint32_t entry_hi, ui
         hash_page_table[head].next = index;
         hash_page_table[index].next = next;
         hash_page_table[index].prev = head;
+        if(next != NO_NEXT_PAGE) {
+            hash_page_table[next].prev = index;
+        }
     }
 
     hash_page_table[index].entry_hi = vpn;

@@ -100,12 +100,12 @@ static int allocate_memory(struct addrspace * as, vaddr_t addr, size_t memsize, 
     uint32_t top = ((addr + memsize + PAGE_SIZE -1) & PAGE_FRAME) >> FLAG_OFFSET;
     uint32_t base = addr >> FLAG_OFFSET;
 
-    for(uint32_t start = top; start <= base; start++) {
+    for(uint32_t start = base; start <= top; start++) {
         paddr_t paddr = alloc_kpages(1);
         uint32_t entry_hi = start << FLAG_OFFSET;
         uint32_t entry_lo = ((paddr & PAGE_FRAME) | (1 << HPTABLE_VALID)) & (1 << HPTABLE_GLOBAL);
         if(permission & HPTABLE_WRITE) {
-            entry_lo |= 1 << HPTABLE_DIRTY;
+            entry_lo |= (1 << HPTABLE_DIRTY);
         } else {
             entry_lo &= ~(1 << HPTABLE_DIRTY);
         }

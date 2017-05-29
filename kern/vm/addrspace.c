@@ -103,7 +103,7 @@ static int define_memory(struct addrspace * as, vaddr_t addr, size_t memsize, in
 
     for(uint32_t start = base; start <= top; start++) {
         uint32_t entry_hi = start << FLAG_OFFSET;
-        uint32_t entry_lo = ((paddr & PAGE_FRAME) | (1 << HPTABLE_VALID)) & (1 << HPTABLE_GLOBAL);
+        uint32_t entry_lo = (paddr & PAGE_FRAME) | (1 << HPTABLE_VALID) | (1 << HPTABLE_GLOBAL);
         if(permission & HPTABLE_WRITE) {
             entry_lo |= (1 << HPTABLE_DIRTY);
         } else {
@@ -118,31 +118,12 @@ static int define_memory(struct addrspace * as, vaddr_t addr, size_t memsize, in
     }
 }
 
-static int allocate_memory(struct addrspace * as, vaddr_t addr, size_t memsize, int permission, int defined) {
-    if(addr + memsize >= MIPS_KSEG0) {
-        return EFAULT;
+int allocate_memory(int hash_page_index) {
+    paddr_t paddr = alloc_kpages(1);
+    hash_page_table[hash_page_index].entry_lo |= paddr;
+    if(paddr == 0) {
+        return ENOMEM;
     }
-
-    uint32_t top = ((addr + memsize + PAGE_SIZE -1) & PAGE_FRAME) >> FLAG_OFFSET;
-    uint32_t base = addr >> FLAG_OFFSET;
-
-    for(uint32_t start = base; start <= top; start++) {
-        paddr_t paddr = alloc_kpages(1);
-        uint32_t entry_hi = start << FLAG_OFFSET;
-        uint32_t entry_lo = ((paddr & PAGE_FRAME) | (1 << HPTABLE_VALID)) | (1 << HPTABLE_GLOBAL);
-        if(permission & HPTABLE_WRITE) {
-            entry_lo |= (1 << HPTABLE_DIRTY);
-        } else {
-            entry_lo &= ~(1 << HPTABLE_DIRTY);
-        }
-        entry_lo |= permission;
-        entry_lo |= defined;
-
-        if(!insert_page_table_entry(as, entry_hi, entry_lo)) {
-            return ENOMEM;
-        }
-    }
-
     return 0;
 }
 
@@ -237,7 +218,7 @@ as_activate(void)
     struct addrspace *as;
 
     as = proc_getas();
-    if (as == NULL) { 
+    if (as == NULL) {
         return;
     }
 
@@ -270,7 +251,7 @@ int
 as_define_region(struct addrspace *as, vaddr_t vaddr, size_t memsize,
                  int readable, int writeable, int executable)
 {
-    int result = allocate_memory(as, vaddr, memsize, (readable|writeable|executable) << 1, HPTABLE_DEFINED);
+    int result = define_memory(as, vaddr, memsize, (readable|writeable|executable) << 1, HPTABLE_DEFINED);
     if(result) {
         return ENOMEM;
     }
@@ -321,7 +302,7 @@ as_define_stack(struct addrspace *as, vaddr_t *stackptr)
         /* Initial user-level stack pointer */
     *stackptr = USERSTACK;
     vaddr_t location = USERSTACK - PAGE_SIZE * STACK_PAGE;
-    int result = allocate_memory(as, location, PAGE_SIZE * STACK_PAGE, 6 << 1, 0);
+    int result = define_memory(as, location, PAGE_SIZE * STACK_PAGE, 6 << 1, 0);
     if(result) {
         return ENOMEM;
     }

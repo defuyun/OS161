@@ -94,6 +94,7 @@ extern struct hash_page_entry * hash_page_table;
 extern int hash_table_size;
 
 void init_frame_and_page_table(void);
+int allocate_memory(int hash_page_index);
 
 /* Initialization function */
 void vm_bootstrap(void);

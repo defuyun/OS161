@@ -3,3 +3,6 @@ kern/compile/*
 *.swp
 *.swo
 build/*
+asst3-src.sublime-project
+sftp-config.json
+.DS_Store

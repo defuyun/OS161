@@ -152,6 +152,8 @@ void free_kpages(vaddr_t addr)
 void share_address(vaddr_t addr) {
     spinlock_acquire(&frame_table_lock);
     int frame_index = KVADDR_TO_PADDR(addr) / PAGE_SIZE;
+    KASSERT(frame_table[frame_index].references > 0);
+    KASSERT(frame_table[frame_index].inuse == FRAME_USED);
     frame_table[frame_index].references += 1;
     spinlock_release(&frame_table_lock);
 }

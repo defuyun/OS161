@@ -89,7 +89,7 @@ vm_fault(int faulttype, vaddr_t faultaddress)
     spinlock_release(&hash_page_table_lock);
 
     spl = splhigh();
-    tlb_random(KVADDR_TO_PADDR(entry_hi), entry_lo);
+    tlb_random(entry_hi,KVADDR_TO_PADDR(entry_lo));
     splx(spl);
     return 0;
 }

@@ -71,8 +71,9 @@ vm_fault(int faulttype, vaddr_t faultaddress)
                     spinlock_release(&hash_page_table_lock);
                     return ENOMEM;
                 }
-                entry_lo = hash_page_table[index].entry_lo;
             }
+
+            entry_lo = hash_page_table[index].entry_lo;
             entry_lo &= ~HPTABLE_STATEBITS;
             if(faulttype == VM_FAULT_WRITE) {
                 // we need to reset dirty bit because it might be a have soft write set
@@ -88,7 +89,7 @@ vm_fault(int faulttype, vaddr_t faultaddress)
     spinlock_release(&hash_page_table_lock);
 
     spl = splhigh();
-    tlb_random(entry_hi, entry_lo);
+    tlb_random(KVADDR_TO_PADDR(entry_hi), entry_lo);
     splx(spl);
     return 0;
 }

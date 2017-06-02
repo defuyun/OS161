@@ -63,10 +63,11 @@
 #define HPTABLE_WRITE          4
 #define HPTABLE_EXECUTE        2
 #define HPTABLE_SWRITE         1
-#define HPTABLE_DEFINED       16
 
 #define HPTABLE_PERMISSION    15
 #define HPTABLE_STATEBITS     31
+
+#define HPTABLE_STACK_RW 6
 
 struct hpt_entry {
         uint32_t pid; /* asid identifier */
@@ -97,6 +98,7 @@ void free_kpages(vaddr_t addr);
 /* TLB shootdown handling called from interprocessor_interrupt */
 void vm_tlbshootdown(const struct tlbshootdown *);
 
-
+/* flushes the TLB */
 void tlb_flush(void);
+
 #endif /* _VM_H_ */

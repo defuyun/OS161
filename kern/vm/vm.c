@@ -33,13 +33,18 @@ int vm_fault(int faulttype, vaddr_t faultaddress) {
         int index = hpt_hash(as, vpn);
         bool found = false;
 
-        while (index != NO_NEXT_PAGE && hpt[index].inuse) {
+        // while (index != NO_NEXT_PAGE && hpt[index].inuse) {
+
+        // while (index != NO_NEXT_PAGE) {
+
+        while(index < hpt_size) {
 
                 if ((hpt[index].entry_hi & PAGE_FRAME) == vpn &&
-                    hpt[index].pid == pid) {
+                    hpt[index].pid == pid && hpt[index].inuse) {
 
                         found = true;
                         break;
+
                 } else {
                         index = hpt[index].next;
                 }

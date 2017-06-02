@@ -22,21 +22,21 @@ struct ft_entry {
         /* next free frame within the free frame list */
         int next;
         /* usage status of the current frame */
-        short inuse;
+        int inuse;
 };
 
-static struct ft_entry * ft = NULL;
+static struct ft_entry *ft = NULL;
 static int total_num_frames;
 /* next free frame index within the ft */
 static int ft_next_free;
 
-struct hpt_entry * hpt = NULL;
+struct hpt_entry *hpt = NULL;
 int hpt_size;
 
 
 /* sets the new next free frame index, ref count, and usage status
  * of the frame table at the index */
-static void set_ft_entry(int index, int new_next, short new_status) {
+static void set_ft_entry(int index, int new_next, int new_status) {
         ft[index].next = new_next;
         ft[index].inuse = new_status;
 }

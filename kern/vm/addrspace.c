@@ -54,7 +54,7 @@ static bool insert_page_table_entry(struct addrspace *as, uint32_t entry_hi,
         uint32_t vpn = entry_hi & PAGE_FRAME;
         int index = hpt_hash(as, vpn);
 
-        int next = hpt[index].next;
+        int orig_next = hpt[index].next;
         int head = index;
         int count = 0;
 
@@ -71,9 +71,9 @@ static bool insert_page_table_entry(struct addrspace *as, uint32_t entry_hi,
         if (head != index) {
                 hpt[head].next = index;
                 hpt[index].prev = head;
-                hpt[index].next = next;
-                if (next != NO_NEXT_PAGE) {
-                        hpt[next].prev = index;
+                hpt[index].next = orig_next;
+                if (orig_next != NO_NEXT_PAGE) {
+                        hpt[orig_next].prev = index;
                 }
         }
 
@@ -86,7 +86,7 @@ static bool insert_page_table_entry(struct addrspace *as, uint32_t entry_hi,
 }
 
 static int define_memory(struct addrspace * as, vaddr_t addr, size_t memsize,
-                         int permission) {
+                         int permissions) {
 
         if (addr + memsize > MIPS_KSEG0) {
                 return EFAULT;
@@ -103,14 +103,14 @@ static int define_memory(struct addrspace * as, vaddr_t addr, size_t memsize,
                                     (1 << HPTABLE_VALID) |
                                     (1 << HPTABLE_GLOBAL);
 
-                if (permission & HPTABLE_WRITE) {
+                if (permissions & HPTABLE_WRITE) {
                         entry_lo |= (1 << HPTABLE_DIRTY);
                 } else {
                         entry_lo &= ~(1 << HPTABLE_DIRTY);
                 }
 
-                entry_lo |= permission;
-                entry_lo |= HPTABLE_DEFINED;
+                entry_lo |= permissions;
+                entry_lo |= HPTABLE_SWRITE;
 
                 spinlock_acquire(&hpt_lock);
                 if (!insert_page_table_entry(as, entry_hi, entry_lo)) {
@@ -214,24 +214,36 @@ void as_destroy(struct addrspace *as) {
 
         for (int i = 0; i < hpt_size; i++) {
 
-                if (hpt[i].inuse && hpt[i].pid == pid) {
-                        free_kpages(hpt[i].entry_lo);
-
-                        int prev = hpt[i].prev;
-                        int next = hpt[i].next;
-
-                        if(prev != NO_NEXT_PAGE) {
-                                hpt[prev].next = next;
-                        }
-
-                        if(next != NO_NEXT_PAGE) {
-                                hpt[next].prev = prev;
-                        }
-
-                        hpt[i].inuse = false;
-                        hpt[i].next = NO_NEXT_PAGE;
-                        hpt[i].prev = NO_NEXT_PAGE;
+                if (!hpt[i].inuse || hpt[i].pid != pid) {
+                        continue;
                 }
+
+                free_kpages(hpt[i].entry_lo);
+
+                volatile int curr = i;
+                volatile int next = hpt[curr].next;
+                while (next != NO_NEXT_PAGE) {
+                        int temp = next;
+                        int old_prev = hpt[curr].prev;
+                        hpt[curr] = hpt[next];
+                        hpt[curr].prev = old_prev;
+                        hpt[curr].next = next;
+                        curr = next;
+                        next = hpt[curr].next;
+                        if (temp == next)
+                                kprintf("fuck");
+                }
+
+                if (hpt[curr].prev != NO_NEXT_PAGE) {
+                        hpt[hpt[curr].prev].next = NO_NEXT_PAGE;
+                }
+
+                hpt[curr].inuse = false;
+                hpt[curr].next = NO_NEXT_PAGE;
+                hpt[curr].prev = NO_NEXT_PAGE;
+                hpt[curr].pid = 0;
+                hpt[curr].entry_hi = 0;
+                hpt[curr].entry_lo = 0;
         }
         spinlock_release(&hpt_lock);
         tlb_flush();
@@ -270,12 +282,12 @@ void as_deactivate(void) {
  * moment, these are ignored. When you write the VM system, you may
  * want to implement them.
  */
-int
-as_define_region(struct addrspace *as, vaddr_t vaddr, size_t memsize,
-                                 int readable, int writeable, int executable)
-{
+int as_define_region(struct addrspace *as, vaddr_t vaddr, size_t memsize,
+                     int readable, int writeable, int executable) {
+
         int result = define_memory(as, vaddr, memsize,
                                    (readable|writeable|executable) << 1);
+
         if (result) {
                 return ENOMEM;
         }
@@ -283,56 +295,52 @@ as_define_region(struct addrspace *as, vaddr_t vaddr, size_t memsize,
         return 0;
 }
 
-int
-as_prepare_load(struct addrspace *as)
-{
-        uint32_t pid = (uint32_t) as;
-        spinlock_acquire(&hpt_lock);
-        for (int i = 0; i < hpt_size; i++) {
-
-                if (hpt[i].inuse &&
-                    hpt[i].pid == pid &&
-                    hpt[i].entry_lo & HPTABLE_DEFINED) {
-
-                        hpt[i].entry_lo &= ~HPTABLE_DEFINED;
-                        hpt[i].entry_lo |= HPTABLE_SWRITE;
-                }
-        }
-        spinlock_release(&hpt_lock);
+/* as_prepare_load does not need to do anything, because
+ * as_define_region called the static function "int define_memory",
+ * which set an SWRITE bit within each entry_lo.
+ * 
+ * When VM Fault is triggered, if it sees an
+ * SWRITE bit within entry_lo, it will ignore the permissions bits
+ * stored and instead temporarily allow read/write.
+ * 
+ * The SWRITE bit is cleared by as_complete_load. */
+int as_prepare_load(struct addrspace *as) {
+        (void) as;
         return 0;
 }
 
-int
-as_complete_load(struct addrspace *as)
-{
+int as_complete_load(struct addrspace *as) {
+
         uint32_t pid = (uint32_t) as;
         spinlock_acquire(&hpt_lock);
         for (int i = 0; i < hpt_size; i++) {
 
-                if (hpt[i].inuse &&
-                    hpt[i].pid == pid &&
+                if (hpt[i].inuse && hpt[i].pid == pid &&
                     hpt[i].entry_lo & HPTABLE_SWRITE) {
 
                         hpt[i].entry_lo &= ~HPTABLE_SWRITE;
                 }
         }
         spinlock_release(&hpt_lock);
-        // need to flush tlb because during prepare load we set
-        // the softwrite which consequently caused
-        // the tlb entry to have dirty bit set,
-        // but this soft write is only temporary so by flushing the tlb
-        // the next time there won't be a softwrite and
-        // therefore the permission will be set to normal
+        /*
+         * need to flush tlb because during prepare load we set
+         * the softwrite which consequently caused
+         * the tlb entry to have dirty bit set,
+         * but this soft write is only temporary so by flushing the tlb
+         * the next time there won't be a softwrite and
+         * therefore the permission will be set to normal
+         */
         tlb_flush();
         return 0;
 }
 
-int
-as_define_stack(struct addrspace *as, vaddr_t *stackptr)
-{
+int as_define_stack(struct addrspace *as, vaddr_t *stackptr) {
+
         *stackptr = USERSTACK;
         vaddr_t location = USERSTACK - (PAGE_SIZE * STACK_PAGE);
-        int result = define_memory(as, location, PAGE_SIZE * STACK_PAGE, 6 << 1);
+
+        int result = define_memory(as, location, PAGE_SIZE * STACK_PAGE,
+                                   HPTABLE_STACK_RW << 1);
         if (result) {
                 return ENOMEM;
         }

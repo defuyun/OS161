@@ -148,6 +148,7 @@ as_create(void)
         if (as == NULL) {
                 return NULL;
         }
+        tlb_flush();
         return as;
 }
 
@@ -166,24 +167,26 @@ as_copy(struct addrspace *old, struct addrspace **ret)
         spinlock_acquire(&hpt_lock);
         for(int i = 0; i < hpt_size; i++) {
                 if(hpt[i].inuse && hpt[i].pid == pid) {
-                                // share_address(hpt[i].entry_lo & PAGE_FRAME);
-                                vaddr_t old_entry_lo = hpt[i].entry_lo & PAGE_FRAME;
-                                vaddr_t new_entry_lo = old_entry_lo;
-                                if(old_entry_lo != 0) {
-                                    new_entry_lo = alloc_kpages(1);
-                                    if(new_entry_lo == 0) {
+                        vaddr_t old_entry_lo = hpt[i].entry_lo & PAGE_FRAME;
+                        vaddr_t new_entry_lo = old_entry_lo;
+                        if(old_entry_lo != 0) {
+                                new_entry_lo = alloc_kpages(1);
+                                if(new_entry_lo == 0) {
                                         spinlock_release(&hpt_lock);
                                         return ENOMEM;
-                                    }
-                                    memmove((void *)new_entry_lo,(void *)old_entry_lo, PAGE_SIZE);
                                 }
+                                memmove((void *)new_entry_lo,(void *)old_entry_lo, PAGE_SIZE);
+                        }
+        		
+        		paddr_t tlb_states = (hpt[i].entry_lo & (1 << HPTABLE_DIRTY)) | 
+        				(hpt[i].entry_lo & (1 << HPTABLE_VALID)) | 
+        				(hpt[i].entry_lo & (1 << HPTABLE_GLOBAL));
 
-                                new_entry_lo |= hpt[i].entry_lo & HPTABLE_STATEBITS;
+                        new_entry_lo |= ((hpt[i].entry_lo & HPTABLE_STATEBITS) | tlb_states);
 
-                                if(!insert_page_table_entry(newas,
-                                                                                hpt[i].entry_hi,
-                                                                                new_entry_lo
-                                                                                )) {
+                        if(!insert_page_table_entry(newas,
+                				hpt[i].entry_hi, 
+                				new_entry_lo)) {
                                 spinlock_release(&hpt_lock);
                                 as_destroy(newas);
                                 return ENOMEM; // return some fault telling user no more space left in page table
@@ -222,7 +225,7 @@ as_destroy(struct addrspace *as)
                 }
         }
         spinlock_release(&hpt_lock);
-
+        tlb_flush();
         kfree(as);
 }
 

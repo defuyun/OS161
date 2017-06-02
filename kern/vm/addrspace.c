@@ -46,10 +46,13 @@ uint32_t hpt_hash(struct addrspace *as, vaddr_t faultaddr) {
         return index;
 }
 
-/* the function that calls this has to use a sync primitive */
-static bool insert_page_table_entry(struct addrspace * as, uint32_t entry_hi, uint32_t entry_lo) {
+/* all functions that call this have to use a sync primitive
+ * to ensure mutex on the hpt. */
+static bool insert_page_table_entry(struct addrspace * as, uint32_t entry_hi,
+                                    uint32_t entry_lo) {
+
         uint32_t vpn = entry_hi & PAGE_FRAME;
-        int index = hpt_hash(as, entry_hi);
+        int index = hpt_hash(as, vpn);
 
         int next = hpt[index].next;
         int head = index;

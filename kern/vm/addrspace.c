@@ -220,18 +220,16 @@ void as_destroy(struct addrspace *as) {
 
                 free_kpages(hpt[i].entry_lo);
 
-                volatile int curr = i;
-                volatile int next = hpt[curr].next;
+                int curr = i;
+                int next = hpt[curr].next;
+
                 while (next != NO_NEXT_PAGE) {
-                        int temp = next;
                         int old_prev = hpt[curr].prev;
                         hpt[curr] = hpt[next];
                         hpt[curr].prev = old_prev;
                         hpt[curr].next = next;
                         curr = next;
                         next = hpt[curr].next;
-                        if (temp == next)
-                                kprintf("fuck");
                 }
 
                 if (hpt[curr].prev != NO_NEXT_PAGE) {

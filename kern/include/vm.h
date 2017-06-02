@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2000, 2001, 2002, 2003, 2004, 2005, 2008, 2009
- *	The President and Fellows of Harvard College.
+ *      The President and Fellows of Harvard College.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -47,11 +47,6 @@
 #define VM_FAULT_WRITE       1    /* A write was attempted */
 #define VM_FAULT_READONLY    2    /* A write to a readonly page was attempted*/
 
-#define FRAME_UNUSED 0
-#define FRAME_USED 1
-#define FRAME_RESERVED 3
-
-#define NO_NEXT_FRAME -1
 #define NO_NEXT_PAGE -1
 
 #define FLAG_OFFSET 12
@@ -73,27 +68,20 @@
 #define HPTABLE_PERMISSION    15
 #define HPTABLE_STATEBITS     31
 
-
-struct frame_table_entry {
-    int references;
-    int next;
-    short inuse;
+struct hpt_entry {
+        uint32_t pid; /* asid identifier */
+        uint32_t entry_hi; /* VPN top 20 bits */
+        uint32_t entry_lo; /* PFN top 20 bits */
+        bool inuse;
+        int next;
+        int prev;
 };
 
-struct hash_page_entry {
-    uint32_t pid;
-    uint32_t entry_hi;
-    uint32_t entry_lo;
-    bool inuse;
-    int next;
-    int prev;
-};
+extern struct spinlock hpt_lock;
+extern struct hpt_entry * hpt;
+extern int hpt_size;
 
-extern struct spinlock hash_page_table_lock;
-extern struct hash_page_entry * hash_page_table;
-extern int hash_table_size;
-
-void init_frame_and_page_table(void);
+void init_ft_hpt(void);
 int allocate_memory(int hash_page_index);
 
 /* Initialization function */

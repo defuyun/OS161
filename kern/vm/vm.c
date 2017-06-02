@@ -11,87 +11,89 @@
 
 void vm_bootstrap(void)
 {
-    init_frame_and_page_table();
+        init_ft_hpt();
 }
 
 int
 vm_fault(int faulttype, vaddr_t faultaddress)
 {
-    struct addrspace * as;
-    int spl;
+        struct addrspace * as;
+        int spl;
+        uint32_t debug = 0;
 
-    as = proc_getas();
-    if(as == NULL) {
-        return EFAULT;
-    }
-
-    if(faulttype == VM_FAULT_READONLY) {
-        return EINVAL;
-    }
-
-    if(faultaddress >= MIPS_KSEG0) {
-        return EFAULT;
-    }
-
-    vaddr_t vpn = faultaddress & PAGE_FRAME;
-    uint32_t pid = (uint32_t) as;
-    int index = hpt_hash(as, vpn);
-    bool found = false;
-
-    spinlock_acquire(&hash_page_table_lock);
-
-    if(hash_page_table == NULL) {
-        spinlock_release(&hash_page_table_lock);
-        return EFAULT;
-    }
-
-    while(index != NO_NEXT_PAGE && hash_page_table[index].inuse) {
-        if((hash_page_table[index].entry_hi & PAGE_FRAME) == vpn && hash_page_table[index].pid == pid) {
-            found = true;
-            break;
-        } else {
-            index = hash_page_table[index].next;
+        as = proc_getas();
+        if(as == NULL) {
+                return EFAULT;
         }
-    }
 
-    uint32_t entry_hi = vpn;
-    uint32_t entry_lo;
+        if(faulttype == VM_FAULT_READONLY) {
+                return EINVAL;
+        }
 
-    if(found) {
-        entry_lo = hash_page_table[index].entry_lo;
+        if(faultaddress >= MIPS_KSEG0) {
+                return EFAULT;
+        }
 
-        if((faulttype == VM_FAULT_READ && !(entry_lo & HPTABLE_READ)) ||
-           (faulttype == VM_FAULT_WRITE && !(entry_lo & (HPTABLE_WRITE | HPTABLE_SWRITE)))) {
-            spinlock_release(&hash_page_table_lock);
-            return EFAULT;
-        } else {
-            if((entry_lo & PAGE_FRAME) == 0) {
-                int result = allocate_memory(index);
-                if(result) {
-                    spinlock_release(&hash_page_table_lock);
-                    return ENOMEM;
+        vaddr_t vpn = faultaddress & PAGE_FRAME;
+        uint32_t pid = (uint32_t) as;
+        int index = hpt_hash(as, vpn);
+        bool found = false;
+
+        spinlock_acquire(&hpt_lock);
+
+        if(hpt == NULL) {
+                spinlock_release(&hpt_lock);
+                return EFAULT;
+        }
+
+        while(index != NO_NEXT_PAGE && hpt[index].inuse) {
+                if((hpt[index].entry_hi & PAGE_FRAME) == vpn && hpt[index].pid == pid) {
+                        found = true;
+                        break;
+                } else {
+                        index = hpt[index].next;
                 }
-            }
-
-            entry_lo = hash_page_table[index].entry_lo;
-            entry_lo &= ~HPTABLE_STATEBITS;
-            if(faulttype == VM_FAULT_WRITE) {
-                // we need to reset dirty bit because it might be a have soft write set
-                entry_lo |= (1 << HPTABLE_DIRTY);
-            }
         }
-    } else {
-        // not sure what to do when not found in page table, what does it mean to check valid region
-        spinlock_release(&hash_page_table_lock);
-        return EFAULT;
-    }
 
-    spinlock_release(&hash_page_table_lock);
+        uint32_t entry_hi = vpn;
+        uint32_t entry_lo;
 
-    spl = splhigh();
-    tlb_random(entry_hi,KVADDR_TO_PADDR(entry_lo));
-    splx(spl);
-    return 0;
+        if(found) {
+                debug |= 1;
+                entry_lo = hpt[index].entry_lo;
+
+                if((faulttype == VM_FAULT_READ && !(entry_lo & HPTABLE_READ)) ||
+                   (faulttype == VM_FAULT_WRITE && !(entry_lo & (HPTABLE_WRITE | HPTABLE_SWRITE)))) {
+                        spinlock_release(&hpt_lock);
+                        return EFAULT;
+                } else {
+                        if((entry_lo & PAGE_FRAME) == 0) {
+                                int result = allocate_memory(index);
+                                if(result) {
+                                        spinlock_release(&hpt_lock);
+                                        return ENOMEM;
+                                }
+                        }
+
+                        entry_lo = hpt[index].entry_lo;
+                        entry_lo &= ~HPTABLE_STATEBITS;
+                        if(faulttype == VM_FAULT_WRITE) {
+                                // we need to reset dirty bit because it might be a have soft write set
+                                entry_lo |= (1 << HPTABLE_DIRTY);
+                        }
+                }
+        } else {
+                // not sure what to do when not found in page table, what does it mean to check valid region
+                spinlock_release(&hpt_lock);
+                return EFAULT;
+        }
+
+        spinlock_release(&hpt_lock);
+
+        spl = splhigh();
+        tlb_random(entry_hi,KVADDR_TO_PADDR(entry_lo));
+        splx(spl);
+        return 0;
 }
 
 /*
@@ -102,7 +104,7 @@ vm_fault(int faulttype, vaddr_t faultaddress)
 void
 vm_tlbshootdown(const struct tlbshootdown *ts)
 {
-    (void)ts;
-    panic("vm tried to do tlb shootdown?!\n");
+        (void)ts;
+        panic("vm tried to do tlb shootdown?!\n");
 }
 

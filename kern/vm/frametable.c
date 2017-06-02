@@ -6,155 +6,230 @@
 #include <vm.h>
 #include <spinlock.h>
 
-/* Place your frametable data-structures here
- * You probably also want to write a frametable initialisation
- * function and call it from vm_bootstrap
- */
+/* local defined constants for use by the frame table */
+#define FRAME_UNUSED 0
+#define FRAME_USED 1
+#define FRAME_RESERVED 2
+#define NO_NEXT_FRAME -1
 
+/* locks for synchronisation */
 static struct spinlock stealmem_lock = SPINLOCK_INITIALIZER;
-static struct spinlock frame_table_lock = SPINLOCK_INITIALIZER;
-struct spinlock hash_page_table_lock = SPINLOCK_INITIALIZER;
+static struct spinlock ft_lock = SPINLOCK_INITIALIZER;
+struct spinlock hpt_lock = SPINLOCK_INITIALIZER;
 
-struct hash_page_entry * hash_page_table = NULL;
-int hash_table_size;
+/* ft table struct visible only to this file */
+struct ft_entry {
+        /* number of references to this frame */
+        int ref;
+        /* next free frame within the free frame list */
+        int next;
+        /* usage status of the current frame */
+        short inuse;
+};
 
-static struct frame_table_entry * frame_table = NULL;
-static int frame_table_size;
-static int next_free_frame;
+static struct ft_entry * ft = NULL;
+static int total_num_frames;
+/* next free frame index within the ft */
+static int ft_next_free;
 
-static void set_frame_table_entry(int index, int _next, int _references, short _inuse) {
-    frame_table[index].next = _next;
-    frame_table[index].references = _references;
-    frame_table[index].inuse = _inuse;
+struct hpt_entry * hpt = NULL;
+int hpt_size;
+
+/* total RAM */
+static paddr_t total_mem_size;
+/* bottom location of the ft. ft is at the top of memory. */
+static paddr_t ft_bot_location;
+/* bottom location of the hpt. hpt is below the ft. */
+static paddr_t hpt_bot_location;
+/* top paddr location of the os. os is at the bottom of memory. */
+static paddr_t os_top_location;
+
+/* top and bottom indexes of the usable mem region within the ft. */
+static int usable_mem_top_index;
+static int usable_mem_bot_index;
+
+
+
+
+/* sets the new next free frame index, ref count, and usage status
+ * of the frame table at the index */
+static void set_ft_entry(int index, int new_next,
+                         int new_ref, short new_status) {
+
+        // TEST remove when submitting
+        KASSERT(index >= 0 && index < total_num_frames);
+        KASSERT(new_ref >= 0);
+        KASSERT(new_status == FRAME_UNUSED ||
+                new_status == FRAME_RESERVED ||
+                new_status == FRAME_USED);
+        KASSERT((new_next >= 0 && new_next < total_num_frames) ||
+                new_next == NO_NEXT_FRAME);
+
+
+        ft[index].ref = new_ref;
+        ft[index].next = new_next;
+        ft[index].inuse = new_status;
 }
 
-// initialize frame table
-void init_frame_and_page_table() {
-    spinlock_acquire(&hash_page_table_lock);
-    spinlock_acquire(&frame_table_lock);
-    // allocate memory space for the frame table
-    int i = 0;
-    paddr_t size = ram_getsize();
-    frame_table_size = size / PAGE_SIZE;
-    paddr_t location = size - (frame_table_size * sizeof(struct frame_table_entry));
-    frame_table = (struct frame_table_entry *) PADDR_TO_KVADDR(location);
 
 
-    hash_table_size = frame_table_size * 2;
-    paddr_t total_mem_usage = hash_table_size * sizeof(struct hash_page_entry);
-    paddr_t hash_location = location - total_mem_usage;
-    hash_page_table = (struct hash_page_entry *) PADDR_TO_KVADDR(hash_location);
+/* initialize frame table */
+void init_ft_hpt() {
+        spinlock_acquire(&hpt_lock);
+        spinlock_acquire(&ft_lock);
 
-    // initialize the next pointers of the frame table
-    for(i = 0; i < frame_table_size; i++) {
-        set_frame_table_entry(i,i+1,0,FRAME_UNUSED);
-    }
+        total_mem_size = ram_getsize();
 
-    set_frame_table_entry(frame_table_size-1, NO_NEXT_FRAME, 0, FRAME_UNUSED);
+        /* initialize frame table location (mem_top - ft_mem_size) */
+        total_num_frames = (total_mem_size + (PAGE_SIZE - 1)) / PAGE_SIZE;
+        paddr_t ft_mem_size = total_num_frames * sizeof(struct ft_entry);
+        paddr_t ft_bot_location = total_mem_size - ft_mem_size;
+        ft = (struct ft_entry *) PADDR_TO_KVADDR(ft_bot_location);
 
-    // initialize the entry of hash_page_table to not used
-    for(i = 0; i < hash_table_size; i++) {
-        hash_page_table[i].inuse = false;
-        hash_page_table[i].next = NO_NEXT_PAGE;
-        hash_page_table[i].prev = NO_NEXT_PAGE;
-    }
+        /* initialize hpt location (ft_bottom_location - hpt_mem_size) */
+        hpt_size = total_num_frames * 2; /* hpt_size = num entries in hpt */
+        paddr_t hpt_mem_size = hpt_size * sizeof(struct hpt_entry);
+        hpt_bot_location = ft_bot_location - hpt_mem_size;
+        hpt = (struct hpt_entry *) PADDR_TO_KVADDR(hpt_bot_location);
 
-    // set frame table as reserved
-    int frame_table_num_entries = (sizeof(struct frame_table_entry) * frame_table_size) / PAGE_SIZE;
-    for(i = 0; i < frame_table_num_entries; i++) {
-        set_frame_table_entry(frame_table_size-1-i, NO_NEXT_FRAME, 1, FRAME_RESERVED);
-    }
+        /* initialize the contents and next free frame indexes */
+        for (int i = 0; i < total_num_frames - 1; i++) {
+                set_ft_entry(i, i + 1, 0, FRAME_UNUSED);
+        }
+        set_ft_entry(total_num_frames - 1, NO_NEXT_FRAME, 0, FRAME_UNUSED);
 
-    // set hash page table as reserved
-    int hash_page_table_entries = total_mem_usage / PAGE_SIZE + i;
-    for(; i < hash_page_table_entries; i++) {
-        set_frame_table_entry(frame_table_size-1-i, NO_NEXT_FRAME, 1, FRAME_RESERVED);
-    }
-
-    // set os161 frame to reserved
-    vaddr_t os161_size = ram_getfirstfree();
-    int os161_num_entries = (os161_size + PAGE_SIZE -1 )/ PAGE_SIZE; // round up or else the top page will be rounded down and we loss a page
-    for(next_free_frame = 0; next_free_frame < os161_num_entries; next_free_frame++) {
-        set_frame_table_entry(i,NO_NEXT_FRAME,1,FRAME_RESERVED);
-    }
-
-    spinlock_release(&frame_table_lock);
-    spinlock_release(&hash_page_table_lock);
-}
-
-/* Note that this function returns a VIRTUAL address, not a physical
- * address
- * WARNING: this function gets called very early, before
- * vm_bootstrap().  You may wish to modify main.c to call your
- * frame table initialisation function, or check to see if the
- * frame table has been initialised and call ram_stealmem() otherwise.
- */
-
-vaddr_t alloc_kpages(unsigned int npages)
-{
-    paddr_t addr;
-
-    spinlock_acquire(&frame_table_lock);
-
-    if(frame_table == NULL) {
-        spinlock_acquire(&stealmem_lock);
-        addr = ram_stealmem(npages);
-        spinlock_release(&stealmem_lock);
-    } else {
-        if(npages != 1 || next_free_frame == NO_NEXT_FRAME) {
-            spinlock_release(&frame_table_lock);
-            return 0;
+        /* initialize each entry within the hpt as unused */
+        for (int i = 0; i < hpt_size; i++) {
+                hpt[i].inuse = false;
+                hpt[i].next = NO_NEXT_PAGE;
+                hpt[i].prev = NO_NEXT_PAGE;
         }
 
-        int curr = next_free_frame;
-        next_free_frame = frame_table[curr].next;
-        set_frame_table_entry(curr, NO_NEXT_FRAME, frame_table[curr].references + 1, FRAME_USED);
-        // zero out the page
-        memset((void *)PADDR_TO_KVADDR(curr * PAGE_SIZE),0,PAGE_SIZE);
-        addr = curr * PAGE_SIZE;
-    }
-    spinlock_release(&frame_table_lock);
+        int ft_hpt_num_entries = (ft_mem_size + hpt_mem_size + PAGE_SIZE - 1)
+                                  / PAGE_SIZE;
+        /* set ft and hpt as reserved within the frame table */
+        for (int i = 0; i < ft_hpt_num_entries; i++) {
+                set_ft_entry(total_num_frames - 1 - i, NO_NEXT_FRAME, 1,
+                             FRAME_RESERVED);
+        }
+        /* get the highest index of the usable mem region */
+        usable_mem_top_index = total_num_frames - 1 - ft_hpt_num_entries;
 
-    if(addr == 0)
-        return 0;
+        /* set os161 as reserved within the frame table */
+        paddr_t os_mem_size = ram_getfirstfree();
+        os_top_location = os_mem_size;
+        int os_num_entries = (os_mem_size + PAGE_SIZE - 1) / PAGE_SIZE;
+        for (ft_next_free = 0; ft_next_free < os_num_entries; ft_next_free++) {
+                set_ft_entry(ft_next_free, NO_NEXT_FRAME, 1, FRAME_RESERVED);
+        }
+        /* ft_next_free now refers to the first free frame index above os161 */
+        usable_mem_bot_index = ft_next_free;
 
-    return PADDR_TO_KVADDR(addr);
+        spinlock_release(&ft_lock);
+        spinlock_release(&hpt_lock);
 }
 
-void free_kpages(vaddr_t addr)
-{
-
-    spinlock_acquire(&frame_table_lock);
-    if(frame_table == NULL) {
-        spinlock_release(&frame_table_lock);
-        return;
-    }
-
-    int frame_index = KVADDR_TO_PADDR(addr) / PAGE_SIZE;
-
-    if(frame_table[frame_index].inuse == FRAME_RESERVED || frame_table[frame_index].inuse == FRAME_UNUSED ||
-       addr < MIPS_KSEG0 || addr >= MIPS_KSEG1) {
-        spinlock_release(&frame_table_lock);
-        return;
-    }
 
 
-    frame_table[frame_index].references -= 1;
-    if(frame_table[frame_index].references == 0) {
-        int prev_next_free = next_free_frame;
-        next_free_frame = frame_index;
-        set_frame_table_entry(frame_index, prev_next_free, 0, FRAME_UNUSED);
-    }
+vaddr_t alloc_kpages(unsigned int npages) {
+        paddr_t paddr;
 
-    spinlock_release(&frame_table_lock);
+        spinlock_acquire(&ft_lock);
+
+        if (ft == NULL) {
+                spinlock_acquire(&stealmem_lock);
+                paddr = ram_stealmem(npages);
+                spinlock_release(&stealmem_lock);
+
+        } else if (npages != 1 || ft_next_free == NO_NEXT_FRAME) {
+                spinlock_release(&ft_lock);
+                return 0;
+
+        } else {
+                KASSERT(ft_next_free >= usable_mem_bot_index && ft_next_free <= usable_mem_top_index);
+
+                int curr_index = ft_next_free;
+
+                KASSERT(ft_bot_location + (curr_index * sizeof(struct ft_entry)) >= ft_bot_location &&
+                        ft_bot_location + (curr_index * sizeof(struct ft_entry)) < total_mem_size);
+
+                ft_next_free = ft[curr_index].next;
+
+                KASSERT(ft[curr_index].inuse == FRAME_UNUSED);
+
+                KASSERT(ft_next_free >= usable_mem_bot_index && ft_next_free <= usable_mem_top_index);
+
+                set_ft_entry(curr_index, NO_NEXT_FRAME, 1, FRAME_USED);
+                /* zero out the page */
+                paddr = curr_index * PAGE_SIZE;
+                memset((void *)PADDR_TO_KVADDR(paddr), 0, PAGE_SIZE);
+        }
+        spinlock_release(&ft_lock);
+
+        if (paddr == 0) {
+                return 0;
+        }
+
+        return PADDR_TO_KVADDR(paddr);
 }
+
+
+
+void free_kpages(vaddr_t vaddr) {
+        vaddr &= PAGE_FRAME;
+
+        spinlock_acquire(&ft_lock);
+        if (ft == NULL) {
+                spinlock_release(&ft_lock);
+                return;
+        }
+
+        if (vaddr == 0) {
+                spinlock_release(&ft_lock);
+                return;
+        }
+
+        KASSERT(vaddr >= MIPS_KSEG0 && vaddr < MIPS_KSEG1);
+
+        int ft_index = KVADDR_TO_PADDR(vaddr) / PAGE_SIZE;
+
+        KASSERT(ft_index <= usable_mem_top_index && ft_index >= usable_mem_bot_index);
+
+        KASSERT(ft_bot_location + (ft_index * sizeof(struct ft_entry)) >= ft_bot_location &&
+                ft_bot_location + (ft_index * sizeof(struct ft_entry)) < total_mem_size);
+
+        KASSERT(ft[ft_index].inuse == FRAME_USED);
+        KASSERT(ft[ft_index].ref >= 1);
+
+        ft[ft_index].ref -= 1;
+        if(ft[ft_index].ref == 0) {
+                int prev_next_free = ft_next_free;
+                ft_next_free = ft_index;
+                set_ft_entry(ft_index, prev_next_free, 0, FRAME_UNUSED);
+        }
+
+        spinlock_release(&ft_lock);
+}
+
+
 
 void share_address(vaddr_t addr) {
-    spinlock_acquire(&frame_table_lock);
-    int frame_index = KVADDR_TO_PADDR(addr) / PAGE_SIZE;
-    KASSERT(frame_table[frame_index].references > 0);
-    KASSERT(frame_table[frame_index].inuse == FRAME_USED);
-    frame_table[frame_index].references += 1;
-    spinlock_release(&frame_table_lock);
+        spinlock_acquire(&ft_lock);
+
+        if (addr == 0) {
+                spinlock_release(&ft_lock);
+                return;
+        }
+
+        KASSERT(addr >= MIPS_KSEG0 && addr < MIPS_KSEG1);
+
+        int ft_index = KVADDR_TO_PADDR(addr) / PAGE_SIZE;
+        KASSERT(ft_index <= usable_mem_top_index && ft_index >= usable_mem_bot_index);
+        KASSERT(ft_bot_location + (ft_index * sizeof(struct ft_entry)) >= ft_bot_location &&
+                ft_bot_location + (ft_index * sizeof(struct ft_entry)) < total_mem_size);
+        KASSERT(ft[ft_index].ref > 0);
+        KASSERT(ft[ft_index].inuse == FRAME_USED);
+        ft[ft_index].ref += 1;
+        spinlock_release(&ft_lock);
 }
 

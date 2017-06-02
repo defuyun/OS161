@@ -38,205 +38,198 @@
 #include <vm.h>
 #include <proc.h>
 
-/*
- * Note! If OPT_DUMBVM is set, as is the case until you start the VM
- * assignment, this file is not compiled or linked or in any way
- * used. The cheesy hack versions in dumbvm.c are used instead.
- *
- * UNSW: If you use ASST3 config as required, then this file forms
- * part of the VM subsystem.
- *
- */
-uint32_t hpt_hash(struct addrspace *as, vaddr_t faultaddr)
-{
-    uint32_t index;
-    index = (((uint32_t )as) ^ (faultaddr >> PAGE_BITS)) % hash_table_size;
-    return index;
+/* takes in an address space address and an entryhi, returns a hashed index
+ * within the HPT */
+uint32_t hpt_hash(struct addrspace *as, vaddr_t faultaddr) {
+        uint32_t index;
+        index = (((uint32_t )as) ^ (faultaddr >> PAGE_BITS)) % hpt_size;
+        return index;
 }
 
+/* the function that calls this has to use a sync primitive */
 static bool insert_page_table_entry(struct addrspace * as, uint32_t entry_hi, uint32_t entry_lo) {
-    uint32_t vpn = entry_hi & PAGE_FRAME;
-    int index = hpt_hash(as, entry_hi);
+        uint32_t vpn = entry_hi & PAGE_FRAME;
+        int index = hpt_hash(as, entry_hi);
 
-    spinlock_acquire(&hash_page_table_lock);
-    int next = hash_page_table[index].next;
-    int head = index;
-    int count = 0;
+        int next = hpt[index].next;
+        int head = index;
+        int count = 0;
 
-    while(hash_page_table[index].inuse && count < hash_table_size) {
-        ++index;
-        index %= hash_table_size;
-        count++;
-    }
-
-    if(count == hash_table_size) {
-        spinlock_release(&hash_page_table_lock);
-        return false;
-    }
-
-    if(head != index) {
-        hash_page_table[head].next = index;
-        hash_page_table[index].next = next;
-        hash_page_table[index].prev = head;
-        if(next != NO_NEXT_PAGE) {
-            hash_page_table[next].prev = index;
+        while(hpt[index].inuse && count < hpt_size) {
+                ++index;
+                index %= hpt_size;
+                count++;
         }
-    }
 
-    hash_page_table[index].entry_hi = vpn;
-    hash_page_table[index].entry_lo = entry_lo;
-    hash_page_table[index].inuse = true;
-    hash_page_table[index].pid = (uint32_t) as;
+        if(count == hpt_size) {
+                spinlock_release(&hpt_lock);
+                return false;
+        }
 
-    spinlock_release(&hash_page_table_lock);
-    return true;
+        if(head != index) {
+                hpt[head].next = index;
+                hpt[index].next = next;
+                hpt[index].prev = head;
+                if(next != NO_NEXT_PAGE) {
+                        hpt[next].prev = index;
+                }
+        }
+
+        hpt[index].entry_hi = vpn;
+        hpt[index].entry_lo = entry_lo;
+        hpt[index].inuse = true;
+        hpt[index].pid = (uint32_t) as;
+
+        return true;
 }
 
-static int define_memory(struct addrspace * as, vaddr_t addr, size_t memsize, int permission, int defined) {
-    if(addr + memsize >= MIPS_KSEG0) {
-        return EFAULT;
-    }
-
-    uint32_t top = ((addr + memsize + PAGE_SIZE -1) & PAGE_FRAME) >> FLAG_OFFSET;
-    uint32_t base = addr >> FLAG_OFFSET;
-    paddr_t paddr = 0;
-
-    for(uint32_t start = base; start <= top; start++) {
-        uint32_t entry_hi = start << FLAG_OFFSET;
-        uint32_t entry_lo = (paddr & PAGE_FRAME) | (1 << HPTABLE_VALID) | (1 << HPTABLE_GLOBAL);
-        if(permission & HPTABLE_WRITE) {
-            entry_lo |= (1 << HPTABLE_DIRTY);
-        } else {
-            entry_lo &= ~(1 << HPTABLE_DIRTY);
+static int define_memory(struct addrspace * as, vaddr_t addr, size_t memsize, int permission) {
+        if(addr + memsize > MIPS_KSEG0) {
+                return EFAULT;
         }
-        entry_lo |= permission;
-        entry_lo |= defined;
 
-        if(!insert_page_table_entry(as, entry_hi, entry_lo)) {
-            return ENOMEM;
+        uint32_t top = ((addr + memsize + PAGE_SIZE -1) & PAGE_FRAME) >> FLAG_OFFSET;
+        uint32_t base = addr >> FLAG_OFFSET;
+        paddr_t paddr = 0;
+
+        for(uint32_t start = base; start < top; start++) {
+                uint32_t entry_hi = start << FLAG_OFFSET;
+                uint32_t entry_lo = (paddr & PAGE_FRAME) | (1 << HPTABLE_VALID) | (1 << HPTABLE_GLOBAL);
+                if(permission & HPTABLE_WRITE) {
+                        entry_lo |= (1 << HPTABLE_DIRTY);
+                } else {
+                        entry_lo &= ~(1 << HPTABLE_DIRTY);
+                }
+                entry_lo |= permission;
+                entry_lo |= HPTABLE_DEFINED;
+
+                spinlock_acquire(&hpt_lock);
+                if(!insert_page_table_entry(as, entry_hi, entry_lo)) {
+
+                        spinlock_release(&hpt_lock);
+                        return ENOMEM;
+                }
+
+                spinlock_release(&hpt_lock);
         }
-    }
 
-    return 0;
+        return 0;
 }
 
 int allocate_memory(int hash_page_index) {
-    paddr_t paddr = alloc_kpages(1);
-    hash_page_table[hash_page_index].entry_lo |= paddr;
-    if(paddr == 0) {
-        return ENOMEM;
-    }
-    return 0;
+        paddr_t paddr = alloc_kpages(1);
+        hpt[hash_page_index].entry_lo |= paddr;
+        if(paddr == 0) {
+                return ENOMEM;
+        }
+        return 0;
 }
 
 void tlb_flush(void) {
-	int i, spl;
- 	spl = splhigh();
+        int i, spl;
+        spl = splhigh();
 
-	for (i=0; i<NUM_TLB; i++) {
-		tlb_write(TLBHI_INVALID(i), TLBLO_INVALID(), i);
-	}
+        for (i = 0; i < NUM_TLB; i++) {
+                tlb_write(TLBHI_INVALID(i), TLBLO_INVALID(), i);
+        }
 
-	splx(spl);
+        splx(spl);
  }
 
 struct addrspace *
 as_create(void)
 {
-    struct addrspace *as;
+        struct addrspace *as;
 
-    as = kmalloc(sizeof(struct addrspace));
-    if (as == NULL) {
-        return NULL;
-    }
-    return as;
+        as = kmalloc(sizeof(struct addrspace));
+        if (as == NULL) {
+                return NULL;
+        }
+        return as;
 }
 
 int
 as_copy(struct addrspace *old, struct addrspace **ret)
 {
-    struct addrspace *newas;
+        struct addrspace *newas;
 
-    newas = as_create();
-    if (newas==NULL) {
-        return ENOMEM;
-    }
-
-    uint32_t pid = (uint32_t) old;
-
-    spinlock_acquire(&hash_page_table_lock);
-    for(int i = 0; i < hash_table_size; i++) {
-        if(hash_page_table[i].inuse && hash_page_table[i].pid == pid) {
-                share_address(hash_page_table[i].entry_lo & PAGE_FRAME);
-                if(!insert_page_table_entry(newas,
-                                        hash_page_table[i].entry_hi,
-                                        hash_page_table[i].entry_lo
-                                        )) {
-                spinlock_release(&hash_page_table_lock);
-                as_destroy(newas);
-                return ENOMEM; // return some fault telling user no more space left in page table
-            }
+        newas = as_create();
+        if (newas==NULL) {
+                return ENOMEM;
         }
-    }
-    spinlock_release(&hash_page_table_lock);
 
-    *ret = newas;
-    return 0;
+        uint32_t pid = (uint32_t) old;
+
+        spinlock_acquire(&hpt_lock);
+        for(int i = 0; i < hpt_size; i++) {
+                if(hpt[i].inuse && hpt[i].pid == pid) {
+                                share_address(hpt[i].entry_lo & PAGE_FRAME);
+                                if(!insert_page_table_entry(newas,
+                                                                                hpt[i].entry_hi,
+                                                                                hpt[i].entry_lo
+                                                                                )) {
+                                spinlock_release(&hpt_lock);
+                                as_destroy(newas);
+                                return ENOMEM; // return some fault telling user no more space left in page table
+                        }
+                }
+        }
+        spinlock_release(&hpt_lock);
+
+        *ret = newas;
+        return 0;
 }
 
 void
 as_destroy(struct addrspace *as)
 {
-    uint32_t pid = (uint32_t) as;
-    spinlock_acquire(&hash_page_table_lock);
-    for(int i = 0; i < hash_table_size; i++) {
-        if(hash_page_table[i].inuse && hash_page_table[i].pid == pid) {
-            free_kpages(hash_page_table[i].entry_lo);
+        uint32_t pid = (uint32_t) as;
+        spinlock_acquire(&hpt_lock);
+        for(int i = 0; i < hpt_size; i++) {
+                if(hpt[i].inuse && hpt[i].pid == pid) {
+                        free_kpages(hpt[i].entry_lo);
 
-            int prev = hash_page_table[i].prev;
-            int next = hash_page_table[i].next;
+                        int prev = hpt[i].prev;
+                        int next = hpt[i].next;
 
-            if(prev != NO_NEXT_PAGE) {
-                hash_page_table[prev].next = next;
-            }
+                        if(prev != NO_NEXT_PAGE) {
+                                hpt[prev].next = next;
+                        }
 
-            if(next != NO_NEXT_PAGE) {
-                hash_page_table[next].prev = prev;
-            }
+                        if(next != NO_NEXT_PAGE) {
+                                hpt[next].prev = prev;
+                        }
 
-            hash_page_table[i].inuse = false;
-            hash_page_table[i].next = NO_NEXT_PAGE;
-            hash_page_table[i].prev = NO_NEXT_PAGE;
+                        hpt[i].inuse = false;
+                        hpt[i].next = NO_NEXT_PAGE;
+                        hpt[i].prev = NO_NEXT_PAGE;
+                }
         }
-    }
-    spinlock_release(&hash_page_table_lock);
+        spinlock_release(&hpt_lock);
 
-    kfree(as);
+        kfree(as);
 }
 
-void
-as_activate(void)
-{
-    struct addrspace *as;
+void as_activate(void) {
+        struct addrspace *as;
 
-    as = proc_getas();
-    if (as == NULL) {
-        return;
-    }
+        as = proc_getas();
+        if (as == NULL) {
+                return;
+        }
 
-    tlb_flush();
+        tlb_flush();
 }
 
-void
-as_deactivate(void)
-{
-    tlb_flush();
-        /*
-         * Write this. For many designs it won't need to actually do
-         * anything. See proc.c for an explanation of why it (might)
-         * be needed.
-         */
+void as_deactivate(void) {
+        struct addrspace *as;
 
+        as = proc_getas();
+        if (as == NULL) {
+                return;
+        }
+
+        tlb_flush();
 }
 
 /*
@@ -251,64 +244,65 @@ as_deactivate(void)
  */
 int
 as_define_region(struct addrspace *as, vaddr_t vaddr, size_t memsize,
-                 int readable, int writeable, int executable)
+                                 int readable, int writeable, int executable)
 {
-    int result = define_memory(as, vaddr, memsize, (readable|writeable|executable) << 1, HPTABLE_DEFINED);
-    if(result) {
-        return ENOMEM;
-    }
+        int result = define_memory(as, vaddr, memsize, (readable|writeable|executable) << 1);
+        if(result) {
+                return ENOMEM;
+        }
 
-    return 0;
+        return 0;
 }
 
 int
+
 as_prepare_load(struct addrspace *as)
 {
-    uint32_t pid = (uint32_t) as;
-    spinlock_acquire(&hash_page_table_lock);
-    for(int i = 0; i < hash_table_size; i++) {
-        if(hash_page_table[i].inuse &&
-           hash_page_table[i].pid == pid &&
-           hash_page_table[i].entry_lo & HPTABLE_DEFINED) {
-            hash_page_table[i].entry_lo &= ~HPTABLE_DEFINED;
-            hash_page_table[i].entry_lo |= HPTABLE_SWRITE;
+        uint32_t pid = (uint32_t) as;
+        spinlock_acquire(&hpt_lock);
+        for(int i = 0; i < hpt_size; i++) {
+                if(hpt[i].inuse &&
+                   hpt[i].pid == pid &&
+                   hpt[i].entry_lo & HPTABLE_DEFINED) {
+                        hpt[i].entry_lo &= ~HPTABLE_DEFINED;
+                        hpt[i].entry_lo |= HPTABLE_SWRITE;
+                }
         }
-    }
-    spinlock_release(&hash_page_table_lock);
-    return 0;
+        spinlock_release(&hpt_lock);
+        return 0;
 }
 
 int
 as_complete_load(struct addrspace *as)
 {
-    uint32_t pid = (uint32_t) as;
-    spinlock_acquire(&hash_page_table_lock);
-    for(int i = 0; i < hash_table_size; i++) {
-        if(hash_page_table[i].inuse &&
-           hash_page_table[i].pid == pid &&
-           hash_page_table[i].entry_lo & HPTABLE_SWRITE) {
-            hash_page_table[i].entry_lo &= ~HPTABLE_SWRITE;
+        uint32_t pid = (uint32_t) as;
+        spinlock_acquire(&hpt_lock);
+        for(int i = 0; i < hpt_size; i++) {
+                if(hpt[i].inuse &&
+                   hpt[i].pid == pid &&
+                   hpt[i].entry_lo & HPTABLE_SWRITE) {
+                        hpt[i].entry_lo &= ~HPTABLE_SWRITE;
+                }
         }
-    }
-    spinlock_release(&hash_page_table_lock);
-    // need to flush tlb because during prepare load we set the softwrite which consequently caused
-    // the tlb entry to have dirty bit set, but this soft write is only temporary so by flushing the tlb
-    // the next time there won't be a softwrite and therefore the permission will be set to normal
-    tlb_flush();
-    return 0;
+        spinlock_release(&hpt_lock);
+        // need to flush tlb because during prepare load we set the softwrite which consequently caused
+        // the tlb entry to have dirty bit set, but this soft write is only temporary so by flushing the tlb
+        // the next time there won't be a softwrite and therefore the permission will be set to normal
+        tlb_flush();
+        return 0;
 }
 
 int
 as_define_stack(struct addrspace *as, vaddr_t *stackptr)
 {
-        /* Initial user-level stack pointer */
-    *stackptr = USERSTACK;
-    vaddr_t location = USERSTACK - PAGE_SIZE * STACK_PAGE;
-    int result = define_memory(as, location, PAGE_SIZE * STACK_PAGE, 6 << 1, 0);
-    if(result) {
-        return ENOMEM;
-    }
+                /* Initial user-level stack pointer */
+        *stackptr = USERSTACK;
+        vaddr_t location = USERSTACK - PAGE_SIZE * STACK_PAGE;
+        int result = define_memory(as, location, PAGE_SIZE * STACK_PAGE, 6 << 1);
+        if(result) {
+                return ENOMEM;
+        }
 
-    return 0;
+        return 0;
 }
 

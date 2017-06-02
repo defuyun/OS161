@@ -1,1 +1,99 @@
-Place your design document here.
+==== frame table and hash page table initialization, alloc and free =====
+
+A major issue was that we had to allocate the frame table and
+hash page tables (the underlying layer of the VM) without the
+use of any kmalloc calls (because kmalloc itself depends on
+what we are implementing).
+
+We determined the total number of frames in memory,
+allocated the frame table at the top of OS161,
+and subtracted the size that will be used by OS161 itself.
+We then designed our hash page table based on twice the number of
+entries in the frame table, and placed it directly at the bottom
+of the frame table. When determining the number of frames,
+we use ceiling to ensure that pages are aligned and frames are
+marked as used for any blocks not aligned wit 4K.
+
+We then calculated the combined size of the frame table and hash
+page table, and determined the number of frames occupied by
+these two objects through division and taking the ceiling. We
+did so similary for OS161 (at the bottom of the memory), taking
+the ceiling as well. We then marked these frames occupied by them
+as within the frame table.
+
+The frame table entries are index-chained, such that the free
+frame list is kept within the frame table entries themselves.
+We do not require an extra structure to keep track of the free
+frames. Frame table entries have a member called status which
+we assign as either free, used, or reserved (reserved means
+being used by the frame table/hash page table/OS). Frame table
+entries that are marked as free have a member called "int free",
+which contains the index of the next free frame. We keep a global
+ft_next_free variable to keep track of the first free frame.
+
+When allocating a page, if the frame table has already been
+initialized, we would grab the first free frame through
+the global variable, and update the global variable to refer to
+the next one in the free frame list. We would then zero-fill
+this entire page, convert it into a kernel virtual address,
+and return.
+
+Similary, when freeing a kpage, we AND EQUALS the lower 12 bits,
+convert it to a paddr, and update the corresponding entry within
+the frame table as well as the global first free frame index.
+
+Sync primitives are used for the frame table and hash page table
+to ensure mutual exclusion when accessing these data structures.
+
+============== hash page table ==================
+
+this assigment is composed of 3 parts, we have:
+1. a frametable for the actual memory mapping
+2. a hash page table for virtual memory mapping
+3. vm_fault for processing tlb miss
+
+the hash page table consists of 6 variables:
+1. inuse -- tells you whether this table is being used
+2. entry_hi -- the vpn
+3. entry_lo -- the kernel virtual adress when inserting in the tlb we need to convert it into phyisical address
+		along with some permission and state bits 
+4. next -- the next index on the chain
+5. prev -- previous index on the chain
+6. pid -- the process id
+
+the hash page table uses a hash function based on the pid and vpn, it maps to a index which is the location on
+the array we initialize in the kernel with right below the frame table
+
+the hash page table is an array with fixed size initialized at front and uses index for chaining
+
+the entry_lo has 20 bits for the kernel virtual address, global, valid, dirty, nocache bits just like
+the tlb entry and below that we used several bits for our selves, in order they are:
+1. defined : a bit to tell you if this segment is just loaded by define mem
+2. read
+3. write
+4. execute
+5. soft write : this bit allows us to ignore the writeable bit when we do the first loading
+
+in as_define we allocate page table for the segments but set entry_lo kernel virtual memory to 0
+and in vm_fault we call alloc_kpages to actually allocate the memory if entry_lo kernel virtual mem
+is 0
+
+in as_copy we copy the hpt entry of the old addrespace and allocate new memory if the orignal
+memory location is not 0
+
+in as_destroy we delete the entries in the hash page table with the same pid and also decrement the reference
+in the frame table, if it become 0 we deallocate the frame
+
+in as_prepare_load loop through all entry in hash page table and  we check the defined bit and if it is set
+we unset it and enable the soft write bit
+
+in as_complete_load we loop through all entries in hash page table and disable any entry with soft write bit
+on, then we flush the tlb because the soft write bit enabled dirty bit and without soft write the entry might
+not suppose to be writable
+
+============== vm_fault =======================
+
+in vm_fault we convert the fault address into vpn by & PAGE_FRAME, using this vpn we look through the hash page
+table and check if any entry has pid == (uint32_t) as and entry_hi == vpn and inuse. if there is we have found
+the entry so we just have to clear the bottom self defined bits and convert the entry_lo to physical address by
+calling the KVADDR_TO_PADDR

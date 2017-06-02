@@ -52,13 +52,13 @@
 #define FLAG_OFFSET 12
 #define PAGE_BITS FLAG_OFFSET
 
-// these are offset so you use them by shifting
+/* these are offset so you use them by shifting */
 #define HPTABLE_NOTCACHE      11
 #define HPTABLE_DIRTY         10
 #define HPTABLE_VALID          9
 #define HPTABLE_GLOBAL         8
 
-// these are actual bit you use them by simple & or |
+/* these are actual bits that you use by simple & or | */
 #define HPTABLE_READ           8
 #define HPTABLE_WRITE          4
 #define HPTABLE_EXECUTE        2
@@ -70,8 +70,8 @@
 
 struct hpt_entry {
         uint32_t pid; /* asid identifier */
-        uint32_t entry_hi; /* VPN top 20 bits */
-        uint32_t entry_lo; /* PFN top 20 bits */
+        uint32_t entry_hi;
+        uint32_t entry_lo;
         bool inuse;
         int next;
         int prev;

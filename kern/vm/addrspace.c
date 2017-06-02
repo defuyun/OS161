@@ -166,10 +166,23 @@ as_copy(struct addrspace *old, struct addrspace **ret)
         spinlock_acquire(&hpt_lock);
         for(int i = 0; i < hpt_size; i++) {
                 if(hpt[i].inuse && hpt[i].pid == pid) {
-                                share_address(hpt[i].entry_lo & PAGE_FRAME);
+                                // share_address(hpt[i].entry_lo & PAGE_FRAME);
+                                vaddr_t old_entry_lo = hpt[i].entry_lo & PAGE_FRAME;
+                                vaddr_t new_entry_lo = old_entry_lo;
+                                if(old_entry_lo != 0) {
+                                    new_entry_lo = alloc_kpages(1);
+                                    if(new_entry_lo == 0) {
+                                        spinlock_release(&hpt_lock);
+                                        return ENOMEM;
+                                    }
+                                    memmove((void *)new_entry_lo,(void *)old_entry_lo, PAGE_SIZE);
+                                }
+
+                                new_entry_lo |= hpt[i].entry_lo & HPTABLE_STATEBITS;
+
                                 if(!insert_page_table_entry(newas,
                                                                                 hpt[i].entry_hi,
-                                                                                hpt[i].entry_lo
+                                                                                new_entry_lo
                                                                                 )) {
                                 spinlock_release(&hpt_lock);
                                 as_destroy(newas);

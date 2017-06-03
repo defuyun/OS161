@@ -29,59 +29,32 @@ int vm_fault(int faulttype, vaddr_t faultaddress) {
         }
 
         vaddr_t vpn = faultaddress & PAGE_FRAME;
-        uint32_t pid = (uint32_t) as;
-        int index = hpt_hash(as, vpn);
-        bool found = false;
+        struct hpt_entry * ptr = find(as, vpn);
 
-        while (index != NO_NEXT_PAGE && hpt[index].inuse) {
-
-                if ((hpt[index].entry_hi & PAGE_FRAME) == vpn &&
-                    hpt[index].pid == pid && hpt[index].inuse) {
-
-                        found = true;
-                        break;
-
-                } else {
-                        index = hpt[index].next;
-                }
-        }
-
-        while (!found && index != NO_NEXT_PAGE && hpt[index].inuse) {
-
-                if ((hpt[index].entry_hi & PAGE_FRAME) == vpn &&
-                    hpt[index].pid == pid && hpt[index].inuse) {
-
-                        found = true;
-                        break;
-                } else {
-                        index = hpt[index].prev;
-                }
-        }
-
-        if (!found) {
-                spinlock_release(&hpt_lock);
+        if (ptr == NULL) {
+                spinlock_release(&hpt_lock);       
                 return EFAULT;
         }
 
-        uint32_t entry_lo = hpt[index].entry_lo;
+        uint32_t entry_lo = ptr->entry_lo;
 
-        if ((faulttype == VM_FAULT_READ && !(entry_lo & HPTABLE_READ)) ||
+        if ((faulttype == VM_FAULT_READ &&
+            !(entry_lo & HPTABLE_READ)) ||
             (faulttype == VM_FAULT_WRITE &&
             !(entry_lo & (HPTABLE_WRITE | HPTABLE_SWRITE)))) {
-
                 spinlock_release(&hpt_lock);
                 return EFAULT;
         }
 
         if ((entry_lo & PAGE_FRAME) == 0) {
-                int result = allocate_memory(index);
+                int result = allocate_memory(ptr);
                 if (result) {
                         spinlock_release(&hpt_lock);
-                        return ENOMEM;
+                        return result;
                 }
         }
 
-        entry_lo = hpt[index].entry_lo;
+        entry_lo = ptr->entry_lo;
         entry_lo &= ~HPTABLE_STATEBITS;
         if (faulttype == VM_FAULT_WRITE) {
                 entry_lo |= (1 << HPTABLE_DIRTY);
@@ -96,6 +69,6 @@ int vm_fault(int faulttype, vaddr_t faultaddress) {
 }
 
 void vm_tlbshootdown(const struct tlbshootdown *ts) {
-        (void)ts;
+        (void) ts;
         panic("vm tried to do tlb shootdown?!\n");
 }

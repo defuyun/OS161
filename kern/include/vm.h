@@ -69,21 +69,20 @@
 
 #define HPTABLE_STACK_RW 6
 
+/* hash page table entry struct */
 struct hpt_entry {
         uint32_t pid; /* asid identifier */
         uint32_t entry_hi;
         uint32_t entry_lo;
-        bool inuse;
-        int next;
-        int prev;
+        struct hpt_entry *next;
 };
 
 extern struct spinlock hpt_lock;
-extern struct hpt_entry * hpt;
+extern struct hpt_entry **hpt;
 extern int hpt_size;
 
 void init_ft_hpt(void);
-int allocate_memory(int hash_page_index);
+int allocate_memory(struct hpt_entry * ptr);
 
 /* Initialization function */
 void vm_bootstrap(void);
@@ -97,8 +96,5 @@ void free_kpages(vaddr_t addr);
 
 /* TLB shootdown handling called from interprocessor_interrupt */
 void vm_tlbshootdown(const struct tlbshootdown *);
-
-/* flushes the TLB */
-void tlb_flush(void);
 
 #endif /* _VM_H_ */

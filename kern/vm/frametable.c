@@ -12,7 +12,7 @@
 #define FRAME_RESERVED 2
 #define NO_NEXT_FRAME -1
 
-/* locks for synchronisation */
+/* locks for synchronisation and exclusion */
 static struct spinlock stealmem_lock = SPINLOCK_INITIALIZER;
 static struct spinlock ft_lock = SPINLOCK_INITIALIZER;
 struct spinlock hpt_lock = SPINLOCK_INITIALIZER;
@@ -25,16 +25,16 @@ struct ft_entry {
         int inuse;
 };
 
-static struct ft_entry *ft = NULL;
-static int total_num_frames;
 /* next free frame index within the ft */
 static int ft_next_free;
+static struct ft_entry *ft = NULL;
 
-struct hpt_entry *hpt = NULL;
+struct hpt_entry **hpt = NULL;
 int hpt_size;
 
 
-/* sets the new next free frame index, ref count, and usage status
+
+/* sets the new next free frame index and usage status
  * of the frame table at the index */
 static void set_ft_entry(int index, int new_next, int new_status) {
         ft[index].next = new_next;
@@ -51,27 +51,24 @@ void init_ft_hpt() {
         paddr_t total_mem_size = ram_getsize();
 
         /* initialize frame table location (mem_top - ft_mem_size) */
-        total_num_frames = (total_mem_size + (PAGE_SIZE - 1)) / PAGE_SIZE;
+        int total_num_frames = (total_mem_size + (PAGE_SIZE - 1)) / PAGE_SIZE;
         paddr_t ft_mem_size = total_num_frames * sizeof(struct ft_entry);
         paddr_t ft_bot_location = total_mem_size - ft_mem_size;
         ft = (struct ft_entry *) PADDR_TO_KVADDR(ft_bot_location);
 
         /* initialize hpt location (ft_bottom_location - hpt_mem_size) */
-        hpt_size = total_num_frames * 2; /* hpt_size = num entries in hpt */
-        paddr_t hpt_mem_size = hpt_size * sizeof(struct hpt_entry);
+        hpt_size = total_num_frames * 2;
+        paddr_t hpt_mem_size = hpt_size * sizeof(struct hpt_entry *);
         paddr_t hpt_bot_location = ft_bot_location - hpt_mem_size;
-        hpt = (struct hpt_entry *) PADDR_TO_KVADDR(hpt_bot_location);
+        hpt = (struct hpt_entry **) PADDR_TO_KVADDR(hpt_bot_location);
 
         for (int i = 0; i < total_num_frames - 1; i++) {
                 set_ft_entry(i, i + 1, FRAME_UNUSED);
         }
         set_ft_entry(total_num_frames - 1, NO_NEXT_FRAME, FRAME_UNUSED);
 
-        /* initialize each entry within the hpt as unused */
         for (int i = 0; i < hpt_size; i++) {
-                hpt[i].inuse = false;
-                hpt[i].next = NO_NEXT_PAGE;
-                hpt[i].prev = NO_NEXT_PAGE;
+                hpt[i] = NULL;
         }
 
         int ft_hpt_num_entries = (ft_mem_size + hpt_mem_size + PAGE_SIZE - 1)

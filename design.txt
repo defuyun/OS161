@@ -1,4 +1,7 @@
-==== frame table and hash page table initialization, alloc and free =====
+
+
+========== frame table and hash page table initialization ========
+
 
 A major issue was that we had to allocate the frame table and
 hash page tables (the underlying layer of the VM) without the
@@ -31,6 +34,10 @@ entries that are marked as free have a member called "int free",
 which contains the index of the next free frame. We keep a global
 ft_next_free variable to keep track of the first free frame.
 
+
+=========== alloc page and freeing pages =========
+
+
 When allocating a page, if the frame table has already been
 initialized, we would grab the first free frame through
 the global variable, and update the global variable to refer to
@@ -45,55 +52,128 @@ the frame table as well as the global first free frame index.
 Sync primitives are used for the frame table and hash page table
 to ensure mutual exclusion when accessing these data structures.
 
+
 ============== hash page table ==================
+
 
 this assigment is composed of 3 parts, we have:
 1. a frametable for the actual memory mapping
 2. a hash page table for virtual memory mapping
 3. vm_fault for processing tlb miss
 
-the hash page table consists of 6 variables:
+the hash page table consists of 4 member variables:
 1. inuse -- tells you whether this table is being used
 2. entry_hi -- the vpn
-3. entry_lo -- the kernel virtual adress when inserting in the tlb we need to convert it into phyisical address
-		along with some permission and state bits 
-4. next -- the next index on the chain
-5. prev -- previous index on the chain
-6. pid -- the process id
+3. entry_lo -- the kernel virtual adress when inserting in the tlb.
+		we need to convert it into phyisical address
+		along with some permission and state bits
+4. pid -- the process id/address space id that will be used to
+			uniquely identify hash page entries, whether it
+			belongs to a given address space.
 
-the hash page table uses a hash function based on the pid and vpn, it maps to a index which is the location on
-the array we initialize in the kernel with right below the frame table
+The hash page table uses a hash function based on the pid and vpn,
+and it maps to an index which is the location on
+the hash page table array that we initialized earlier right below the frame table.
+In case the index already refers to an entry currently in use (collision),
+we use double hashing to find the next free index.
 
-the hash page table is an array with fixed size initialized at front and uses index for chaining
+Double hashing was the best design decision chosen. Linear probing took
+an unacceptably long performance hit, external linked lists/separate chaining
+suffered too much internal fragmentation, while internal index-chaining degrades
+to linear probing performance after just a few inserts/removes (because
+indexes may refer to an entry that was moved elsewhere in an index-chaining
+structure).
 
-the entry_lo has 20 bits for the kernel virtual address, global, valid, dirty, nocache bits just like
-the tlb entry and below that we used several bits for our selves, in order they are:
-1. defined : a bit to tell you if this segment is just loaded by define mem
-2. read
-3. write
-4. execute
-5. soft write : this bit allows us to ignore the writeable bit when we do the first loading
+We timed double hashing, and it was able to create/fork processes quickly and
+pass the tests a lot faster than the other methods.
 
-in as_define we allocate page table for the segments but set entry_lo kernel virtual memory to 0
-and in vm_fault we call alloc_kpages to actually allocate the memory if entry_lo kernel virtual mem
-is 0
 
-in as_copy we copy the hpt entry of the old addrespace and allocate new memory if the orignal
-memory location is not 0
+================= entry lo bits and permission management ====================
 
-in as_destroy we delete the entries in the hash page table with the same pid and also decrement the reference
-in the frame table, if it become 0 we deallocate the frame
 
-in as_prepare_load loop through all entry in hash page table and  we check the defined bit and if it is set
-we unset it and enable the soft write bit
+the entry_lo has 20 bits for the kernel virtual address,
+as well as global, valid, dirty, nocache bits that are MIPS defined and
+dependent on the TLB. The dirty bit is set/cleared depending on the
+write permissions of the entry. This allows the TLB to write if write is allowed
+(by setting the TLB dirty bit).
 
-in as_complete_load we loop through all entries in hash page table and disable any entry with soft write bit
-on, then we flush the tlb because the soft write bit enabled dirty bit and without soft write the entry might
-not suppose to be writable
+Below are four additional bits that we defined in order to manage
+read, write, and execute permissions.
+1. read
+2. write
+3. execute
+4. soft write : This bit is initially set by the "define_memory" function,
+				which is called by as_define_region.
+				This bit allows vm_fault to ignore the permission bits during loading.
+				If vm_fault sees this bit, it will allow reading/writing, since this
+				bit indicates that the OS is still loading in the segments. This bit
+				will later be cleared by as_complete_load, so that vm_fault will default
+				to checking the write bit.
+
+
+=============== address space functions ================
+
+
+In as_define_region, we allocate hash page table entries for the mem segments,
+but we initially set entry_lo kernel virtual memory to 0. We do this optimization,
+because this speeds up forking by just allocating hpt entries but not yet
+immediately finding and allocating free frames.
+Later, in vm_fault, if the fault was caused by such a page entry that
+we haven't allocated a frame, we call alloc_kpages to actually allocate
+the frames. The frames are only loaded/allocated when needed, which is another
+optimization.
+
+In as_copy, we copy the hpt entry of the old addrespace, allocate new frames,
+and copy over the contents of the memory using memmove. Of course, we check
+to ensure that the hpt entries that we are copying from belong to the old
+address space, and that they are currently in use as well.
+
+In as_destroy we delete the entries in the hash page table with the same pid, and
+also call free kpages on the entry lows.
+
+as_prepare_load does not need to do anything, because
+as_define_region called the static function "int define_memory",
+which set an SWRITE bit within each entry_lo.
+The SWRITE bit (soft write bit) indicates to the vm_fault handler
+and ourselves that this segment is still being loaded in by the OS during load_elf.
+When VM Fault is triggered, if it sees an
+SWRITE bit within entry_lo, it will ignore the permissions bits
+stored and instead temporarily allow read/write.
+The SWRITE bit is later cleared by as_complete_load.
+
+in as_complete_load we loop through all entries in the hash page table and clear the
+SWRITE bit of any entry with soft write bits on,
+then we flush the tlb because there might be leftover entries with the soft write bit.
+
+as_activate and deactivate just flush the tlb, because we wouldn't want other processes
+to be able to see what another process was accessing memory from after a context switch.
+flushing it ensures that processes cannot see each other's memory accesses.
+
 
 ============== vm_fault =======================
 
-in vm_fault we convert the fault address into vpn by & PAGE_FRAME, using this vpn we look through the hash page
-table and check if any entry has pid == (uint32_t) as and entry_hi == vpn and inuse. if there is we have found
-the entry so we just have to clear the bottom self defined bits and convert the entry_lo to physical address by
-calling the KVADDR_TO_PADDR
+
+In vm_fault, we check if the faultaddress was accessing an address above MIPS_KSEG0,
+or if the fault type was accessing a read only memory, or if the address space is NULL.
+In this case, we return the corresponding error values to the user.
+
+If none of the above were true, then we would again hash the vpn and asid to obtain
+the hashed index, as well as double hash to obtain the jump distance during probing.
+(Double hashing = It was previously mentioned above that this was actually the fastest
+(we timed it) and speediest way of accessing the HPT).
+
+If we fail to find a matching entry with the asid and vpn,
+or if the fault type did not match the permission bits / softwrite bits contained within
+the entry's entry_lo, then we also return an appropriate error value.
+
+The fault may also be due to an entry where we earlier inserted a hash page table entry
+but did not immediately allocate a frame (as explained above, this massively
+optimizes/speeds up forking and creating new address spaces).
+If this was the case, then we would call
+allocate_memory to allocate a frame to this hash page table entry.
+
+If the fault was an VM_FAULT_WRITE, but the write permission bit is set within entry_lo,
+then we set the dirty bit, because the dirty bit is the only way that the TLB checks
+to see whether a write operation is allowed.
+
+We will then call tlb_random to randomly write our entry hi and entry lo to the TLB.

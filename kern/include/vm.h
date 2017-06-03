@@ -30,13 +30,6 @@
 #ifndef _VM_H_
 #define _VM_H_
 
-/*
- * VM system-related definitions.
- *
- * You'll probably want to add stuff here.
- */
-
-
 #include <machine/vm.h>
 #include <spinlock.h>
 #include <spl.h>
@@ -52,13 +45,34 @@
 #define FLAG_OFFSET 12
 #define PAGE_BITS FLAG_OFFSET
 
-/* these are offset so you use them by shifting */
+/* 
+ * entry low bits dependent on the TLB and MIPS architecture.
+ * The dirty bit is set/cleared depending on the
+ * write permissions of the entry.
+ * This allows the TLB to write if write is allowed
+ * (by setting the TLB dirty bit).
+ */
 #define HPTABLE_NOTCACHE      11
 #define HPTABLE_DIRTY         10
 #define HPTABLE_VALID          9
 #define HPTABLE_GLOBAL         8
 
-/* these are actual bits that you use by simple & or | */
+// Below are four additional bits that we defined in order to manage
+// read, write, and execute permissions.
+// 1. read
+// 2. write
+// 3. execute
+// 4. soft write : This bit is initially set by the "define_memory" function,
+		// which is called by as_define_region.
+		// This bit allows vm_fault to ignore
+		// the permission bits during loading.
+		// If vm_fault sees this bit, it will
+		// allow reading/writing, since this
+		// bit indicates that the OS is still
+		// loading in the segments. This bit
+		// will later be cleared by as_complete_load,
+		// so that vm_fault will default
+		// to checking the write bit.
 #define HPTABLE_READ           8
 #define HPTABLE_WRITE          4
 #define HPTABLE_EXECUTE        2

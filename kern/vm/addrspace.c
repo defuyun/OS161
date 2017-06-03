@@ -46,6 +46,25 @@ uint32_t hpt_hash(struct addrspace *as, vaddr_t vpn) {
         return index;
 }
 
+
+
+/* takes in an address space address and an entryhi, returns the double hash
+ * value, which is the jump distance during linear probing */
+uint32_t hpt_double_hash(struct addrspace *as, vaddr_t vpn) {
+        uint32_t index;
+        index = (((uint32_t ) as) << 7) ^ (vpn / 17) * (vpn >> PAGE_BITS);
+        index %= hpt_size;
+        if (index == 0) {
+                index = 23;
+        }
+        if (index % 2 == 0) {
+                index++;
+        }
+        return index;
+}
+
+
+
 /* all functions that call this have to use a sync primitive
  * to ensure mutex on the hpt. */
 static bool insert_page_table_entry(struct addrspace *as, uint32_t entry_hi,
@@ -53,13 +72,11 @@ static bool insert_page_table_entry(struct addrspace *as, uint32_t entry_hi,
 
         uint32_t vpn = entry_hi & PAGE_FRAME;
         int index = hpt_hash(as, vpn);
+        int jump_dist = hpt_double_hash(as, vpn);
 
-        int orig_next = hpt[index].next;
-        int head = index;
         int count = 0;
-
         while (hpt[index].inuse && count < hpt_size) {
-                index++;
+                index += jump_dist;
                 index %= hpt_size;
                 count++;
         }
@@ -68,19 +85,10 @@ static bool insert_page_table_entry(struct addrspace *as, uint32_t entry_hi,
                 return false;
         }
 
-        if (head != index) {
-                hpt[head].next = index;
-                hpt[index].prev = head;
-                hpt[index].next = orig_next;
-                if (orig_next != NO_NEXT_PAGE) {
-                        hpt[orig_next].prev = index;
-                }
-        }
-
+        hpt[index].pid = (uint32_t) as;
         hpt[index].entry_hi = vpn;
         hpt[index].entry_lo = entry_lo;
         hpt[index].inuse = true;
-        hpt[index].pid = (uint32_t) as;
 
         return true;
 }
@@ -220,28 +228,10 @@ void as_destroy(struct addrspace *as) {
 
                 free_kpages(hpt[i].entry_lo);
 
-                int curr = i;
-                int next = hpt[curr].next;
-
-                while (next != NO_NEXT_PAGE) {
-                        int old_prev = hpt[curr].prev;
-                        hpt[curr] = hpt[next];
-                        hpt[curr].prev = old_prev;
-                        hpt[curr].next = next;
-                        curr = next;
-                        next = hpt[curr].next;
-                }
-
-                if (hpt[curr].prev != NO_NEXT_PAGE) {
-                        hpt[hpt[curr].prev].next = NO_NEXT_PAGE;
-                }
-
-                hpt[curr].inuse = false;
-                hpt[curr].next = NO_NEXT_PAGE;
-                hpt[curr].prev = NO_NEXT_PAGE;
-                hpt[curr].pid = 0;
-                hpt[curr].entry_hi = 0;
-                hpt[curr].entry_lo = 0;
+                hpt[i].inuse = false;
+                hpt[i].pid = 0;
+                hpt[i].entry_hi = 0;
+                hpt[i].entry_lo = 0;
         }
         spinlock_release(&hpt_lock);
         tlb_flush();

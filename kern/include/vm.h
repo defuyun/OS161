@@ -74,8 +74,6 @@ struct hpt_entry {
         uint32_t entry_hi;
         uint32_t entry_lo;
         bool inuse;
-        int next;
-        int prev;
 };
 
 extern struct spinlock hpt_lock;

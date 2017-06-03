@@ -131,5 +131,6 @@ int               as_define_stack(struct addrspace *as, vaddr_t *initstackptr);
 int load_elf(struct vnode *v, vaddr_t *entrypoint);
 void share_address(vaddr_t addr);
 uint32_t hpt_hash(struct addrspace *as, vaddr_t faultaddr);
+uint32_t hpt_double_hash(struct addrspace *as, vaddr_t vpn);
 
 #endif /* _ADDRSPACE_H_ */

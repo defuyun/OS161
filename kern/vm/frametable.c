@@ -70,8 +70,9 @@ void init_ft_hpt() {
         /* initialize each entry within the hpt as unused */
         for (int i = 0; i < hpt_size; i++) {
                 hpt[i].inuse = false;
-                hpt[i].next = NO_NEXT_PAGE;
-                hpt[i].prev = NO_NEXT_PAGE;
+                hpt[i].pid = 0;
+                hpt[i].entry_hi = 0;
+                hpt[i].entry_lo = 0;
         }
 
         int ft_hpt_num_entries = (ft_mem_size + hpt_mem_size + PAGE_SIZE - 1)

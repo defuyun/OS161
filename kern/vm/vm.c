@@ -30,35 +30,25 @@ int vm_fault(int faulttype, vaddr_t faultaddress) {
 
         vaddr_t vpn = faultaddress & PAGE_FRAME;
         uint32_t pid = (uint32_t) as;
+
         int index = hpt_hash(as, vpn);
-        bool found = false;
+        int jump_dist = hpt_double_hash(as, vpn);
 
-        while (index != NO_NEXT_PAGE && hpt[index].inuse) {
-
-                if ((hpt[index].entry_hi & PAGE_FRAME) == vpn &&
-                    hpt[index].pid == pid && hpt[index].inuse) {
-
-                        found = true;
-                        break;
-
-                } else {
-                        index = hpt[index].next;
-                }
-        }
-
-        while (!found && index != NO_NEXT_PAGE && hpt[index].inuse) {
+        int count = 0;
+        while (count < hpt_size) {
 
                 if ((hpt[index].entry_hi & PAGE_FRAME) == vpn &&
                     hpt[index].pid == pid && hpt[index].inuse) {
 
-                        found = true;
                         break;
-                } else {
-                        index = hpt[index].prev;
                 }
+
+                index += jump_dist;
+                index %= hpt_size;
+                count++;
         }
 
-        if (!found) {
+        if (count == hpt_size) {
                 spinlock_release(&hpt_lock);
                 return EFAULT;
         }
